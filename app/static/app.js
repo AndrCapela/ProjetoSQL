@@ -474,7 +474,7 @@
   function renderHistoryPopover() {
     const pop = $("history-popover");
     if (!state.history.length) {
-      pop.innerHTML = `<span class="muted-small" style="padding:6px;">Nenhuma consulta executada ainda.</span>`;
+      pop.innerHTML = `<span class="muted-small history-empty">Nenhuma consulta executada ainda.</span>`;
       return;
     }
     pop.innerHTML = state.history

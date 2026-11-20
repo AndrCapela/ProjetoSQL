@@ -1,0 +1,6 @@
+# Alternativa com HTTPS automático via Let's Encrypt usando Caddy
+# Substitua SEU_IP pelo IP público da sua VPS HostGator
+sql.SEU_IP.nip.io {
+    encode gzip zstd
+    reverse_proxy 127.0.0.1:7500
+}

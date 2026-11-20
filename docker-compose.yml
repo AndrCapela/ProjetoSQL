@@ -1,0 +1,29 @@
+services:
+  sql-arena:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sql-arena
+    restart: unless-stopped
+    # Escuta apenas em localhost (127.0.0.1) para ficar protegido atrás do Nginx/Caddy (nip.io + HTTPS).
+    # Se quiser acessar direto via http://SEU_IP.nip.io:7500 sem proxy reverso, troque para "7500:7500".
+    ports:
+      - "127.0.0.1:7500:7500"
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

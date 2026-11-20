@@ -1094,6 +1094,10 @@ body {
   background: var(--accent-soft);
 }
 
+.history-empty {
+  padding: 6px;
+}
+
 /* ==================== DER / MAPEAMENTO DE OBJETOS ==================== */
 .der-modal {
   width: min(1160px, 96vw);

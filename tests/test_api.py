@@ -143,3 +143,24 @@ def test_execute_returns_error_hint_and_row_diff_statuses(client: TestClient) ->
     assert partial_data["is_correct"] is False
     assert "extra" in partial_data["user_row_status"]
     assert all(s == "match" for s in partial_data["expected_row_status"])
+
+
+def test_security_headers_and_rate_limiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = create_and_seed_database(tmp_path / "sec_escola.db", overwrite=True)
+    monkeypatch.setenv("APP_ENV", "production")
+    sec_app = create_app(db_path=db_path, rate_limit_per_minute=2)
+
+    with TestClient(sec_app) as sec_client:
+        health = sec_client.get("/api/health")
+        assert health.status_code == 200
+        assert health.headers["x-content-type-options"] == "nosniff"
+        assert health.headers["x-frame-options"] == "DENY"
+        assert "default-src 'self'" in health.headers["content-security-policy"]
+        assert sec_client.get("/docs").status_code == 404
+
+        r1 = sec_client.post("/api/execute", json={"sql": "SELECT 1;"})
+        r2 = sec_client.post("/api/execute", json={"sql": "SELECT 1;"})
+        r3 = sec_client.post("/api/execute", json={"sql": "SELECT 1;"})
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 429
