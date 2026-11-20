@@ -8,12 +8,14 @@ Plataforma web interativa em **FastAPI + SQLite** para prática de consultas SQL
 
 ```mermaid
 flowchart LR
-    U["Navegador (SPA Vanilla JS/CSS)"] -->|"HTTP / JSON"| P["Proxy Reverso (Caddy / Nginx + nip.io)"]
+    U["Navegador (SPA Vanilla JS/CSS)"] -->|"HTTP / JSON"| P["Proxy Reverso (CloudPanel Nginx / nip.io)"]
     P -->|"127.0.0.1:7500"| F["FastAPI (app/main.py)"]
     F -->|"Validação + Authorizer + mode=ro"| E["Executor SQL (app/sql_executor.py)"]
     E -->|"Somente leitura"| DB[("SQLite data/escola.db")]
     F -->|"Avaliação semântica"| C["Comparador (app/comparator.py)"]
-    F -->|"Catálogo fixo"| CH["Desafios (app/challenges.py)"]
+    F -->|"Catálogo fixo (40 desafios)"| CH["Desafios (app/challenges.py)"]
+    F -->|"Dúvidas + Contexto SQL"| T["Tutor SQL (app/tutor.py)"]
+    T -->|"HTTPS + x-goog-api-key"| G["Google Gemini API (com fallback)"]
 ```
 
 ### Princípios de Design
@@ -86,9 +88,10 @@ Define o tipo `DifficultyLevel = Literal["facil", "medio", "dificil"]` e os mode
 - **`compare_results(user_result, expected_result, order_matters=False)`**: compara quantidade de colunas e conteúdo das linhas. Quando `order_matters=True`, distingue acerto exato, registros corretos em ordem errada (`"order"`) e divergência de dados.
 
 ### 3.6. `app/main.py` — Servidor FastAPI e Rate Limiting
-- **`SlidingWindowRateLimiter`**: limitador em memória por IP com janela deslizante de 60s protegida por `threading.Lock` e limpeza periódica (`_prune_stale_buckets`) para evitar vazamento de memória por acúmulo de IPs antigos.
+- **`SlidingWindowRateLimiter`**: limitador em memória por IP com janela deslizante configurável (`60s` por minuto ou `86.400s` por dia) protegida por `threading.Lock`, com limpeza periódica (`_prune_stale_buckets`) e cálculo de saldo (`remaining`).
 - **`_extract_client_ip(request)`**: extrai o IP do cliente priorizando `X-Real-IP` e o último item de `X-Forwarded-For` (adicionado pelo proxy reverso confiável), prevenindo spoofing pelo cabeçalho inicial.
-- **`create_app(db_path, rate_limit_per_minute)`**: configura ambiente (`APP_ENV`), `TrustedHostMiddleware` (`ALLOWED_HOSTS`), middleware de headers de segurança/CSP (`add_security_headers`), cache do schema em `application.state.schema_cache`, ciclo de vida (`lifespan`) e endpoints:
+- **`_load_local_dotenv()`**: carrega o `.env` local automaticamente fora do `pytest` e sem sobrescrever variáveis já definidas no ambiente/Docker.
+- **`create_app(db_path, rate_limit_per_minute, chat_rate_limit_per_minute, chat_daily_limit_per_user)`**: configura ambiente (`APP_ENV`), `TrustedHostMiddleware` (`ALLOWED_HOSTS`), middleware de headers de segurança/CSP (`add_security_headers`), cache do schema em `application.state.schema_cache`, ciclo de vida (`lifespan`) e endpoints:
   - `GET /`: entrega `app/static/index.html`.
   - `GET /api/health`: healthcheck utilizado pelo Docker.
   - `GET /api/schema`: retorna o esquema cacheado das tabelas.
@@ -99,17 +102,18 @@ Define o tipo `DifficultyLevel = Literal["facil", "medio", "dificil"]` e os mode
   - `GET /api/chat/status`: informa se o agente Gemini (`GEMINI_API_KEY`) está configurado e qual `GEMINI_MODEL` está ativo.
   - `POST /api/chat`: envia a dúvida do usuário com contexto SQL para `app/tutor.py` (`ask_gemini_tutor`), protegido por `CHAT_RATE_LIMIT_PER_MINUTE`.
 
-### 3.8. `app/tutor.py` — Agente Tutor SQL (Google Gemini)
+### 3.7. `app/tutor.py` — Agente Tutor SQL (Google Gemini)
 - **`TutorConfigError` / `TutorUpstreamError`**: exceções tipadas para chave ausente (`503`) ou falha na API externa (`502`).
-- **`build_schema_context(schema)` / `build_tutor_system_prompt(schema_text)`**: formata as 6 tabelas e suas chaves para instruir o Gemini como tutor especialista em SQLite.
-- **`build_user_turn_with_context(payload, challenge)`**: anexa à pergunta do aluno o enunciado/dica do desafio atual (e referência interna para diagnóstico), a query do editor, o último erro e o resumo do último resultado.
+- **`build_schema_context(schema)` / `build_tutor_system_prompt(schema_text)`**: formata as 6 tabelas e suas chaves para instruir o Gemini como tutor especialista em SQLite, com **regra explícita de recusa** para assuntos fora de SQL/SQLite/modelagem.
+- **`build_user_turn_with_context(payload, challenge)`**: anexa à pergunta do aluno o enunciado/dica do desafio atual (e referência interna para diagnóstico), a query do editor, o último erro e o resumo do último resultado (com truncamento via `_clip_text`).
 - **`ask_gemini_tutor(payload, schema, challenge)`**: chama a Gemini REST API via `httpx.post` com a chave no header `x-goog-api-key`, usando `GEMINI_MODEL` (padrão `gemini-3.5-flash-lite`) e realizando fallback automático em `GEMINI_FALLBACK_MODELS` (`gemini-3.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-flash`). Também aplica economia de tokens configurável via `GEMINI_THINKING_LEVEL=minimal` (mapeado automaticamente para `thinkingLevel` no Gemini 3.x e `thinkingBudget=0` no Gemini 2.5), `GEMINI_MAX_OUTPUT_TOKENS=450`, `CHAT_MAX_HISTORY_MESSAGES=6`, além dos limites por IP `CHAT_RATE_LIMIT_PER_MINUTE=6` e `CHAT_DAILY_LIMIT_PER_USER=20`.
 
-### 3.7. Frontend (`app/static/app.js`, `index.html`, `styles.css`)
-- **Estado central (`state` e `createTableState`)**: mantém modo atual (`challenge`/`free`), nível, filtro de tópico, lista de desafios, IDs resolvidos, histórico de queries, rascunhos por desafio e estado de paginação/ordenação/filtro local das tabelas de resultado.
+### 3.8. Frontend (`app/static/app.js`, `index.html`, `styles.css`)
+- **Estado central (`state` e `createTableState`)**: mantém modo atual (`challenge`/`free`), nível, filtro de tópico, lista de desafios, IDs resolvidos, histórico de queries, rascunhos por desafio, última execução (`lastExecution`), conversa do tutor (`chat`) e estado de paginação/ordenação/filtro local das tabelas de resultado.
 - **Persistência segura (`storageGetJson` / `storageSet`)**: encapsula acesso ao `localStorage` com `try/catch` para evitar quebra em caso de JSON corrompido ou restrições de privacidade do navegador.
-- **Editor SQL (`initEditor`, `formatSqlQuery`, `updateLineNumbers`)**: suporte a `Ctrl+Enter`, indentação por `Tab`, numeração sincronizada com scroll horizontal (`white-space: pre`) e formatador com proteção de literais, comentários e `BETWEEN ... AND ...`.
-- **Resultados e Gabarito (`renderExecutionResponse`, `setExpectedSqlVisible`, `resetResultsView`)**: exibe o resultado do usuário e o resultado esperado lado a lado com destaque visual linha a linha (`row-extra`, `row-missing`, `row-order`). A query SQL do gabarito fica oculta até o usuário acertar ou clicar em **Revelar solução**.
+- **Editor SQL (`initEditor`, `highlightSqlToHtml`, `updateAutocomplete`, `formatSqlQuery`, `updateLineNumbers`)**: suporte a `Ctrl+Enter`, `Ctrl+Espaço`, indentação por `Tab`, destaque de sintaxe em tempo real, autocomplete com tabelas/colunas/apelidos (`a.`) e formatador com proteção de literais, comentários e `BETWEEN ... AND ...`.
+- **Resultados, Navegação e Exportação (`renderExecutionResponse`, `setExpectedSqlVisible`, `exportUserCsv`, `updateProgressPill`)**: navegação `‹`/`›` entre desafios, botão **Próximo desafio ›** no banner de acerto, popover de progresso por nível, exportação em CSV (UTF-8 BOM), templates rápidos no Modo Livre e solução SQL oculta atrás de **Revelar solução**.
+- **Chat Tutor SQL (`initChat`, `openChatDrawer`, `sendChatMessage`)**: gaveta retrátil no canto inferior direito com atalhos de dúvida, formatação segura de Markdown/SQL e envio automático de contexto.
 - **Modais auxiliares**: **Explorador de Dados** (`openDataBrowser`, `loadBrowserData`), **Mapeamento DER** (`renderDerDiagram`, `drawDerConnectors` desenhando cardinalidades `1:N` em SVG dinâmico) e **Guia Rápido SQL**.
 
 ---
@@ -192,4 +196,6 @@ erDiagram
 | **Rate Limiter e IP** | `_extract_client_ip` usava o primeiro IP de `X-Forwarded-For` (passível de spoofing); `_hits` nunca limpava IPs antigos; `/api/tables` sem limite. | Priorização de `X-Real-IP` e último IP de `X-Forwarded-For`, poda periódica (`_prune_stale_buckets`), rate limit dedicado em `browse_table` e escape de `%`/`_`/`\` na busca `LIKE`. |
 | **Performance e Índices** | `/api/tables` e `/api/schema` reexecutavam `PRAGMA` + 6 `COUNT(*)` a cada requisição; FKs sem índices faziam `EXPLAIN` mostrar sempre `SCAN`. | Schema cacheado em `application.state.schema_cache` e adicionados 5 índices nas FKs em `app/database.py` (com `data/escola.db` atualizado). |
 | **Container Docker** | `read_only: true` sem `TMPDIR=/tmp` (SQLite tenta `/var/tmp` antes de `/tmp`) e `Dockerfile` ignorava versões do `requirements.txt`. | Adicionados `TMPDIR=/tmp` e `SQLITE_TMPDIR=/tmp` no `Dockerfile`, criado `requirements-prod.txt` compartilhado com `requirements.txt` e adicionados `docs/` e `data/` no `.dockerignore`. |
-| **Experiência do Aluno (UI)** | Gabarito SQL aparecia aberto logo na primeira tentativa errada; resizer horizontal travava largura no Modo Livre; troca de desafio mantinha resultados antigos; `BETWEEN ... AND` quebrava linha; numeração dessincronizava em linhas longas; `localStorage` sem `try/catch`. | Botão **Revelar/Ocultar solução** (`setExpectedSqlVisible`), `!important` em `.result-pane.single-full`, `resetResultsView()` ao trocar desafio/modo, proteção de `BETWEEN ... AND ...` no formatador, `white-space: pre` no `.sql-textarea`, tratamento de erro em `loadBrowserData`, `CSS.escape` no DER e helpers seguros de `localStorage`. |
+| **Experiência do Aluno (UI)** | Gabarito SQL aparecia aberto logo na primeira tentativa errada; resizer horizontal travava largura no Modo Livre; troca de desafio mantinha resultados antigos; `BETWEEN ... AND` quebrava linha; numeração dessincronizava em linhas longas; `localStorage` sem `try/catch`. | Botão **Revelar/Ocultar solução** (`setExpectedSqlVisible`), `!important` em `.result-pane.single-full`, `resetResultsView()` ao trocar desafio/modo, proteção de `BETWEEN ... AND ...` no formatador, `white-space: pre` no `.sql-textarea`, tratamento de erro em `loadBrowserData`, `CSS.escape` no DER, helpers seguros de `localStorage`, highlight/autocomplete local, exportação CSV, navegação `‹`/`›`, templates no Modo Livre e popover de progresso por nível. |
+| **Catálogo de Desafios** | 30 desafios iniciais (10 por nível). | Expandido para **40 desafios** (`facil-1..10`, `medio-1..15`, `dificil-1..15`) e clarificação da ordenação alfabética em `facil-7`. |
+| **Tutor SQL (Gemini)** | Sem assistente para tirar dúvidas sobre erros das queries. | Adicionados `app/tutor.py`, `/api/chat`, `/api/chat/status` e gaveta retrátil no frontend com fallback automático entre modelos, `thinkingLevel=minimal`, restrição estrita a SQL/SQLite e limites de mensagens/tokens por IP. |
