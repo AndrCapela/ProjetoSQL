@@ -164,3 +164,37 @@ def test_security_headers_and_rate_limiting(tmp_path: Path, monkeypatch: pytest.
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert r3.status_code == 429
+
+        # Tentativa de spoofing no primeiro item de X-Forwarded-For não deve burlar o limite
+        spoof = sec_client.post(
+            "/api/execute",
+            json={"sql": "SELECT 1;"},
+            headers={"X-Forwarded-For": "8.8.8.8, 203.0.113.10"},
+        )
+        spoof2 = sec_client.post(
+            "/api/execute",
+            json={"sql": "SELECT 1;"},
+            headers={"X-Forwarded-For": "1.1.1.1, 203.0.113.10"},
+        )
+        spoof3 = sec_client.post(
+            "/api/execute",
+            json={"sql": "SELECT 1;"},
+            headers={"X-Forwarded-For": "9.9.9.9, 203.0.113.10"},
+        )
+        assert spoof.status_code == 200
+        assert spoof2.status_code == 200
+        assert spoof3.status_code == 429
+
+
+def test_execute_handles_non_json_sqlite_values_and_like_escaping(client: TestClient) -> None:
+    inf_res = client.post("/api/execute", json={"sql": "SELECT 1e999;"})
+    assert inf_res.status_code == 200
+    assert inf_res.json()["user_error"] is not None
+
+    blob_res = client.post("/api/execute", json={"sql": "SELECT X'ff00';"})
+    assert blob_res.status_code == 200
+    assert blob_res.json()["user_result"]["rows"] == [["X'FF00'"]]
+
+    wildcard_res = client.get("/api/tables/alunos?search=%25")
+    assert wildcard_res.status_code == 200
+    assert wildcard_res.json()["total_rows"] == 0

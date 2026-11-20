@@ -1,5 +1,6 @@
 """Testes de segurança, validação somente leitura e limites do executor SQL."""
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from app.database import create_and_seed_database
 from app.sql_executor import (
     SQLValidationError,
     execute_readonly_sql,
+    explain_readonly_sql,
     translate_sqlite_error,
     validate_readonly_sql,
 )
@@ -108,3 +110,29 @@ def test_translate_sqlite_error_returns_friendly_hints(
 
 def test_translate_sqlite_error_returns_none_for_unknown() -> None:
     assert translate_sqlite_error("erro desconhecido qualquer") is None
+
+
+def test_allows_bracket_and_backtick_identifiers_and_sanitizes_values(seeded_db: Path) -> None:
+    res_ident = execute_readonly_sql(
+        "SELECT [a;b], `delete` FROM (SELECT 1 AS [a;b], 2 AS `delete`);",
+        db_path=seeded_db,
+    )
+    assert res_ident.rows == [[1, 2]]
+
+    res_blob = execute_readonly_sql("SELECT X'ff00ab' AS raw_val;", db_path=seeded_db)
+    assert res_blob.rows == [["X'FF00AB'"]]
+
+    with pytest.raises(SQLValidationError):
+        execute_readonly_sql("SELECT 1e999;", db_path=seeded_db)
+
+
+def test_authorizer_blocks_zeroblob_and_allows_explain(seeded_db: Path) -> None:
+    with pytest.raises(sqlite3.DatabaseError):
+        execute_readonly_sql("SELECT zeroblob(1000);", db_path=seeded_db)
+
+    plan = explain_readonly_sql(
+        "SELECT d.nome, p.nome FROM disciplinas d JOIN professores p ON p.id = d.professor_id;",
+        db_path=seeded_db,
+    )
+    assert plan.row_count >= 1
+    assert any("SEARCH" in " ".join(str(c) for c in row) for row in plan.rows)

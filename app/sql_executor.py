@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
 import time
@@ -12,7 +13,15 @@ from typing import Any
 from app.database import DEFAULT_DB_PATH, ensure_database
 
 MAX_ROWS = 500
+MAX_SQLITE_VALUE_BYTES = 100_000
 DEFAULT_TIMEOUT_SECONDS = 1.5
+
+BLOCKED_SQL_FUNCTIONS = {
+    "LOAD_EXTENSION",
+    "FTS3_TOKENIZER",
+    "ZEROBLOB",
+    "RANDOMBLOB",
+}
 
 FORBIDDEN_KEYWORDS = {
     "INSERT",
@@ -78,8 +87,8 @@ def _strip_comments_and_strings(sql: str) -> str:
             out.append(" ")
             continue
 
-        # Literal de texto '...' ou identificador "..."
-        if ch in ("'", '"'):
+        # Literal de texto '...', identificador "..." ou crase `...`
+        if ch in ("'", '"', "`"):
             quote = ch
             i += 1
             while i < length:
@@ -89,6 +98,16 @@ def _strip_comments_and_strings(sql: str) -> str:
                         continue
                     i += 1
                     break
+                i += 1
+            out.append(" __LITERAL__ ")
+            continue
+
+        # Identificador entre colchetes [...] no padrão SQLite
+        if ch == "[":
+            i += 1
+            while i < length and sql[i] != "]":
+                i += 1
+            if i < length:
                 i += 1
             out.append(" __LITERAL__ ")
             continue
@@ -142,6 +161,39 @@ def validate_readonly_sql(sql: str) -> str:
     return cleaned
 
 
+def _sql_authorizer(
+    action: int,
+    arg1: str | None,
+    arg2: str | None,
+    db_name: str | None,
+    trigger_name: str | None,
+) -> int:
+    """Autorizador SQLite em lista branca para garantir execução somente leitura."""
+    if action in (sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ):
+        return sqlite3.SQLITE_OK
+    if hasattr(sqlite3, "SQLITE_RECURSIVE") and action == sqlite3.SQLITE_RECURSIVE:
+        return sqlite3.SQLITE_OK
+    if action == sqlite3.SQLITE_FUNCTION:
+        if arg2 and arg2.upper() in BLOCKED_SQL_FUNCTIONS:
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
+def _sanitize_cell(value: Any) -> Any:
+    """Converte tipos SQLite incompatíveis com JSON (Inf/NaN/bytes) com segurança."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise SQLValidationError(
+            "A consulta gerou um valor numérico infinito ou indefinido (Inf/NaN), que não pode ser exibido."
+        )
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        hex_preview = raw[:64].hex().upper()
+        suffix = "..." if len(raw) > 64 else ""
+        return f"X'{hex_preview}{suffix}'"
+    return value
+
+
 def _run_sqlite_query(
     sql_to_run: str,
     db_path: Path,
@@ -161,14 +213,17 @@ def _run_sqlite_query(
 
     try:
         conn.execute("PRAGMA query_only = ON;")
-        conn.set_progress_handler(_progress_handler, 10_000)
+        if hasattr(conn, "setlimit") and hasattr(sqlite3, "SQLITE_LIMIT_LENGTH"):
+            conn.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, MAX_SQLITE_VALUE_BYTES)
+        conn.set_authorizer(_sql_authorizer)
+        conn.set_progress_handler(_progress_handler, 5_000)
 
         cursor = conn.execute(sql_to_run)
         columns = [desc[0] for desc in (cursor.description or [])]
         fetched = cursor.fetchmany(max_rows + 1)
 
         truncated = len(fetched) > max_rows
-        rows = [list(row) for row in fetched[:max_rows]]
+        rows = [[_sanitize_cell(cell) for cell in row] for row in fetched[:max_rows]]
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
         return SQLExecutionResult(
@@ -186,6 +241,7 @@ def _run_sqlite_query(
         raise
     finally:
         conn.set_progress_handler(None, 0)
+        conn.set_authorizer(None)
         conn.close()
 
 
@@ -274,6 +330,16 @@ def translate_sqlite_error(error_msg: str) -> str | None:
     if "do not have the same number of result columns" in lower:
         return (
             "Dica: em UNION / UNION ALL, todas as consultas devem retornar o mesmo número de colunas."
+        )
+
+    if "string or blob too big" in lower:
+        return (
+            "Dica: o valor de texto/blob gerado pela consulta excedeu o limite máximo permitido."
+        )
+
+    if "not authorized" in lower:
+        return (
+            "Dica: a consulta utilizou uma função ou operação não autorizada em modo somente leitura."
         )
 
     return None

@@ -57,13 +57,22 @@ SECURITY_HEADERS = {
 
 
 class SlidingWindowRateLimiter:
-    """Limitador de requisições em janela deslizante por IP (em memória)."""
+    """Limitador de requisições em janela deslizante por IP (em memória, com limpeza)."""
 
     def __init__(self, max_requests: int, window_seconds: int = 60) -> None:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._lock = Lock()
+        self._checks = 0
+
+    def _prune_stale_buckets(self, cutoff: float) -> None:
+        stale_keys = [
+            ip for ip, dq in self._hits.items()
+            if not dq or dq[-1] <= cutoff
+        ]
+        for ip in stale_keys:
+            del self._hits[ip]
 
     def check(self, key: str) -> None:
         if self.max_requests <= 0:
@@ -71,6 +80,10 @@ class SlidingWindowRateLimiter:
         now = time.monotonic()
         cutoff = now - self.window_seconds
         with self._lock:
+            self._checks += 1
+            if self._checks % 100 == 0 or len(self._hits) > 1000:
+                self._prune_stale_buckets(cutoff)
+
             bucket = self._hits[key]
             while bucket and bucket[0] <= cutoff:
                 bucket.popleft()
@@ -78,7 +91,7 @@ class SlidingWindowRateLimiter:
                 raise HTTPException(
                     status_code=429,
                     detail=(
-                        f"Limite de {self.max_requests} consultas por minuto atingido. "
+                        f"Limite de {self.max_requests} requisições por minuto atingido. "
                         "Aguarde alguns segundos e tente novamente."
                     ),
                 )
@@ -86,12 +99,15 @@ class SlidingWindowRateLimiter:
 
 
 def _extract_client_ip(request: Request) -> str:
+    """Obtém o IP real do cliente evitando spoofing no primeiro item de X-Forwarded-For."""
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and real_ip.strip():
+        return real_ip.strip()
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
+        parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else "unknown"
 
 
@@ -131,13 +147,29 @@ def create_app(
         else int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
     )
     limiter = SlidingWindowRateLimiter(max_requests=limit, window_seconds=60)
+    browse_limit = max(limit * 3, 180) if limit > 0 else 0
+    browse_limiter = SlidingWindowRateLimiter(max_requests=browse_limit, window_seconds=60)
+    schema_lock = Lock()
 
     def enforce_rate_limit(request: Request) -> None:
         limiter.check(_extract_client_ip(request))
 
+    def enforce_browse_rate_limit(request: Request) -> None:
+        browse_limiter.check(_extract_client_ip(request))
+
+    def get_cached_schema() -> list[dict[str, Any]]:
+        cached = application.state.schema_cache
+        if cached is not None:
+            return cached
+        with schema_lock:
+            if application.state.schema_cache is None:
+                application.state.schema_cache = get_schema_metadata(application.state.db_path)
+            return application.state.schema_cache
+
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI):
         ensure_database(app_instance.state.db_path)
+        get_cached_schema()
         yield
 
     application = FastAPI(
@@ -149,6 +181,7 @@ def create_app(
         openapi_url=None if is_prod else "/openapi.json",
     )
     application.state.db_path = Path(db_path)
+    application.state.schema_cache = None
 
     allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "*").strip()
     if allowed_hosts_env and allowed_hosts_env != "*":
@@ -170,17 +203,21 @@ def create_app(
         return FileResponse(STATIC_DIR / "index.html")
 
     @application.get("/api/health")
-    async def health_check() -> dict[str, str]:
-        ensure_database(application.state.db_path)
+    def health_check() -> dict[str, str]:
+        db_file = Path(application.state.db_path)
+        if not db_file.exists():
+            ensure_database(db_file)
         return {"status": "ok"}
 
     @application.get("/api/schema", response_model=list[TableSchema])
-    async def get_schema() -> list[TableSchema]:
-        metadata = get_schema_metadata(application.state.db_path)
-        return [TableSchema(**table) for table in metadata]
+    def get_schema() -> list[TableSchema]:
+        return [TableSchema(**table) for table in get_cached_schema()]
 
-    @application.get("/api/tables/{table_name}")
-    async def browse_table(
+    @application.get(
+        "/api/tables/{table_name}",
+        dependencies=[Depends(enforce_browse_rate_limit)],
+    )
+    def browse_table(
         table_name: str,
         page: int = Query(1, ge=1),
         page_size: int = Query(15, ge=1, le=100),
@@ -189,7 +226,7 @@ def create_app(
         sort_dir: Literal["asc", "desc"] = Query("asc"),
     ) -> dict[str, Any]:
         """Retorna dados paginados e filtráveis de uma tabela válida do esquema."""
-        schema = get_schema_metadata(application.state.db_path)
+        schema = get_cached_schema()
         table_map = {t["name"]: t for t in schema}
         if table_name not in table_map:
             raise HTTPException(status_code=404, detail="Tabela não encontrada.")
@@ -202,9 +239,10 @@ def create_app(
         params: list[Any] = []
         term = search.strip()
         if term:
-            like_parts = [f'CAST("{col}" AS TEXT) LIKE ?' for col in valid_columns]
+            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like_parts = [f'CAST("{col}" AS TEXT) LIKE ? ESCAPE \'\\\'' for col in valid_columns]
             where_clause = "WHERE " + " OR ".join(like_parts)
-            params.extend([f"%{term}%"] * len(valid_columns))
+            params.extend([f"%{escaped}%"] * len(valid_columns))
 
         db_file = Path(application.state.db_path).resolve()
         conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
@@ -236,7 +274,7 @@ def create_app(
         }
 
     @application.get("/api/challenges", response_model=list[ChallengeSummary])
-    async def get_challenges(
+    def get_challenges(
         nivel: DifficultyLevel | None = Query(None),
     ) -> list[ChallengeSummary]:
         return [_to_challenge_summary(ch) for ch in list_challenges(nivel)]
@@ -246,7 +284,7 @@ def create_app(
         response_model=ExecuteQueryResponse,
         dependencies=[Depends(enforce_rate_limit)],
     )
-    async def execute_query(payload: QueryPayload) -> ExecuteQueryResponse:
+    def execute_query(payload: QueryPayload) -> ExecuteQueryResponse:
         current_db = application.state.db_path
 
         if payload.challenge_id is None:
@@ -306,7 +344,7 @@ def create_app(
         "/api/explain",
         dependencies=[Depends(enforce_rate_limit)],
     )
-    async def explain_query(payload: QueryPayload) -> dict[str, Any]:
+    def explain_query(payload: QueryPayload) -> dict[str, Any]:
         """Retorna o plano de execução SQLite (EXPLAIN QUERY PLAN) para fins didáticos."""
         try:
             res = explain_readonly_sql(payload.sql, db_path=application.state.db_path)

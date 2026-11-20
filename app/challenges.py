@@ -383,6 +383,111 @@ CHALLENGES: tuple[Challenge, ...] = (
         ordem_importa=True,
         topicos=("JOIN", "SUM", "GROUP BY", "ORDER BY"),
     ),
+    # ==================== MÉDIO (EXTRAS) ====================
+    Challenge(
+        id="medio-11",
+        nivel="medio",
+        titulo="Cursos e disciplinas por categoria",
+        enunciado=(
+            "Para cada categoria de curso, retorne o nome da categoria, a quantidade de cursos distintos "
+            "e a quantidade total de disciplinas cadastradas naquela categoria. Ordene do maior número "
+            "de disciplinas para o menor e, em caso de empate, pela categoria em ordem alfabética."
+        ),
+        dica="Use LEFT JOIN entre cursos e disciplinas, COUNT(DISTINCT c.id) e COUNT(d.id).",
+        solucao_sql=(
+            "SELECT\n"
+            "    c.categoria,\n"
+            "    COUNT(DISTINCT c.id) AS total_cursos,\n"
+            "    COUNT(d.id) AS total_disciplinas\n"
+            "FROM cursos c\n"
+            "LEFT JOIN disciplinas d ON d.curso_id = c.id\n"
+            "GROUP BY c.categoria\n"
+            "ORDER BY total_disciplinas DESC, c.categoria ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("LEFT JOIN", "COUNT(DISTINCT)", "GROUP BY", "ORDER BY"),
+    ),
+    Challenge(
+        id="medio-12",
+        nivel="medio",
+        titulo="Cursos sem disciplinas cadastradas",
+        enunciado=(
+            "Encontre o id, o nome e a categoria dos cursos que ainda não possuem nenhuma "
+            "disciplina vinculada na tabela disciplinas."
+        ),
+        dica="Faça um LEFT JOIN de cursos para disciplinas e filtre WHERE d.id IS NULL.",
+        solucao_sql=(
+            "SELECT c.id, c.nome, c.categoria\n"
+            "FROM cursos c\n"
+            "LEFT JOIN disciplinas d ON d.curso_id = c.id\n"
+            "WHERE d.id IS NULL;"
+        ),
+        ordem_importa=False,
+        topicos=("LEFT JOIN", "IS NULL"),
+    ),
+    Challenge(
+        id="medio-13",
+        nivel="medio",
+        titulo="Distribuição de matrículas por status",
+        enunciado=(
+            "Mostre cada status existente na tabela alunos_disciplinas e a quantidade total de matrículas "
+            "em cada um, ordenados da maior quantidade para a menor e pelo status em ordem alfabética."
+        ),
+        dica="Agrupe por status com GROUP BY status e conte com COUNT(*).",
+        solucao_sql=(
+            "SELECT status, COUNT(*) AS total_matriculas\n"
+            "FROM alunos_disciplinas\n"
+            "GROUP BY status\n"
+            "ORDER BY total_matriculas DESC, status ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("GROUP BY", "COUNT", "ORDER BY"),
+    ),
+    Challenge(
+        id="medio-14",
+        nivel="medio",
+        titulo="Professores contratados antes de 2020",
+        enunciado=(
+            "Liste o nome, a especialidade, a data_contratacao e o salário dos professores contratados "
+            "antes de 1º de janeiro de 2020, ordenados do contrato mais antigo para o mais recente."
+        ),
+        dica="Como as datas estão em formato ISO (YYYY-MM-DD), use WHERE data_contratacao < '2020-01-01'.",
+        solucao_sql=(
+            "SELECT nome, especialidade, data_contratacao, salario\n"
+            "FROM professores\n"
+            "WHERE data_contratacao < '2020-01-01'\n"
+            "ORDER BY data_contratacao ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("WHERE", "Datas SQLite", "ORDER BY"),
+    ),
+    Challenge(
+        id="medio-15",
+        nivel="medio",
+        titulo="Avaliações em disciplinas concluídas",
+        enunciado=(
+            "Considerando apenas matrículas com status 'concluida', retorne o nome do aluno, "
+            "a quantidade de avaliações lançadas e a média das notas (arredondada para 2 casas decimais), "
+            "somente para os alunos que possuem 4 ou mais avaliações em disciplinas concluídas. "
+            "Ordene da maior média para a menor e pelo nome do aluno."
+        ),
+        dica="Filtre WHERE ad.status = 'concluida' antes de agrupar e use HAVING COUNT(n.id) >= 4.",
+        solucao_sql=(
+            "SELECT\n"
+            "    a.nome,\n"
+            "    COUNT(n.id) AS total_avaliacoes,\n"
+            "    ROUND(AVG(n.nota), 2) AS media_concluidas\n"
+            "FROM alunos a\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
+            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
+            "WHERE ad.status = 'concluida'\n"
+            "GROUP BY a.id, a.nome\n"
+            "HAVING COUNT(n.id) >= 4\n"
+            "ORDER BY media_concluidas DESC, a.nome ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("JOIN", "WHERE", "GROUP BY", "HAVING"),
+    ),
     # ==================== DIFÍCIL ====================
     Challenge(
         id="dificil-1",
@@ -630,6 +735,139 @@ CHALLENGES: tuple[Challenge, ...] = (
         ),
         ordem_importa=True,
         topicos=("CTE (WITH)", "DENSE_RANK()", "Window Function"),
+    ),
+    Challenge(
+        id="dificil-11",
+        nivel="dificil",
+        titulo="Alunos com todas as disciplinas concluídas",
+        enunciado=(
+            "Encontre o id, o nome e a quantidade de disciplinas dos alunos que possuem pelo menos 1 matrícula "
+            "e têm 100% das suas matrículas com status igual a 'concluida' (nenhuma cursando ou trancada). "
+            "Ordene da maior quantidade para a menor e pelo nome do aluno."
+        ),
+        dica="Compare COUNT(ad.id) = SUM(CASE WHEN ad.status = 'concluida' THEN 1 ELSE 0 END) no HAVING, ou use NOT EXISTS.",
+        solucao_sql=(
+            "SELECT a.id, a.nome, COUNT(ad.id) AS total_concluidas\n"
+            "FROM alunos a\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
+            "GROUP BY a.id, a.nome\n"
+            "HAVING COUNT(ad.id) = SUM(CASE WHEN ad.status = 'concluida' THEN 1 ELSE 0 END)\n"
+            "ORDER BY total_concluidas DESC, a.nome ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("HAVING", "CASE WHEN", "NOT EXISTS"),
+    ),
+    Challenge(
+        id="dificil-12",
+        nivel="dificil",
+        titulo="Notas comparadas à média da disciplina",
+        enunciado=(
+            "Para cada avaliação lançada na disciplina 'SQL Avançado e Otimização', retorne o nome do aluno, "
+            "o tipo de avaliação, a nota, a média geral da disciplina (2 casas) e a diferença entre a nota do aluno "
+            "e a média da disciplina (2 casas). Ordene da maior nota para a menor, pelo nome do aluno e pela avaliação."
+        ),
+        dica="Use AVG(n.nota) OVER (PARTITION BY d.id) para manter as linhas individuais junto com a média da turma.",
+        solucao_sql=(
+            "SELECT\n"
+            "    a.nome AS aluno,\n"
+            "    n.avaliacao,\n"
+            "    n.nota,\n"
+            "    ROUND(AVG(n.nota) OVER (PARTITION BY d.id), 2) AS media_disciplina,\n"
+            "    ROUND(n.nota - AVG(n.nota) OVER (PARTITION BY d.id), 2) AS diferenca_media\n"
+            "FROM notas n\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "INNER JOIN alunos a ON a.id = ad.aluno_id\n"
+            "INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
+            "WHERE d.nome = 'SQL Avançado e Otimização'\n"
+            "ORDER BY n.nota DESC, a.nome ASC, n.avaliacao ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("Window Function", "AVG() OVER", "Múltiplos JOINs"),
+    ),
+    Challenge(
+        id="dificil-13",
+        nivel="dificil",
+        titulo="Pivot de matrículas por categoria de curso",
+        enunciado=(
+            "Para cada categoria de curso que possui matrículas, crie um resumo em colunas mostrando: "
+            "a categoria, quantas matrículas estão 'cursando', quantas estão 'concluida', quantas estão 'trancada' "
+            "e o total geral de matrículas. Ordene do maior total para o menor e pela categoria."
+        ),
+        dica="Use múltiplos SUM(CASE WHEN ad.status = '...' THEN 1 ELSE 0 END) agrupando por c.categoria.",
+        solucao_sql=(
+            "SELECT\n"
+            "    c.categoria,\n"
+            "    SUM(CASE WHEN ad.status = 'cursando' THEN 1 ELSE 0 END) AS cursando,\n"
+            "    SUM(CASE WHEN ad.status = 'concluida' THEN 1 ELSE 0 END) AS concluidas,\n"
+            "    SUM(CASE WHEN ad.status = 'trancada' THEN 1 ELSE 0 END) AS trancadas,\n"
+            "    COUNT(ad.id) AS total_matriculas\n"
+            "FROM cursos c\n"
+            "INNER JOIN disciplinas d ON d.curso_id = c.id\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
+            "GROUP BY c.categoria\n"
+            "ORDER BY total_matriculas DESC, c.categoria ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("CASE WHEN", "Agregação Condicional", "Múltiplos JOINs"),
+    ),
+    Challenge(
+        id="dificil-14",
+        nivel="dificil",
+        titulo="Disciplina com maior média em cada curso",
+        enunciado=(
+            "Para cada curso que possui avaliações lançadas, identifique a disciplina com a maior média de notas "
+            "(incluindo empates, se houver). Retorne o nome do curso, o nome da disciplina e a média arredondada "
+            "para 2 casas decimais, ordenados pelo nome do curso e pelo nome da disciplina."
+        ),
+        dica="Calcule a média por disciplina em uma CTE usando RANK() OVER (PARTITION BY c.id ORDER BY AVG(n.nota) DESC).",
+        solucao_sql=(
+            "WITH medias_disc AS (\n"
+            "    SELECT\n"
+            "        c.id AS curso_id,\n"
+            "        c.nome AS curso,\n"
+            "        d.nome AS disciplina,\n"
+            "        ROUND(AVG(n.nota), 2) AS media_nota,\n"
+            "        RANK() OVER (PARTITION BY c.id ORDER BY AVG(n.nota) DESC) AS pos\n"
+            "    FROM cursos c\n"
+            "    INNER JOIN disciplinas d ON d.curso_id = c.id\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
+            "    INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
+            "    GROUP BY c.id, c.nome, d.id, d.nome\n"
+            ")\n"
+            "SELECT curso, disciplina, media_nota\n"
+            "FROM medias_disc\n"
+            "WHERE pos = 1\n"
+            "ORDER BY curso ASC, disciplina ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("CTE (WITH)", "RANK()", "Window Function", "GROUP BY"),
+    ),
+    Challenge(
+        id="dificil-15",
+        nivel="dificil",
+        titulo="Destaque multidisciplinar com vários professores",
+        enunciado=(
+            "Liste o nome do aluno, a quantidade de professores distintos que lecionaram nas disciplinas em que "
+            "ele possui notas e sua média geral de notas (2 casas), apenas para alunos avaliados em disciplinas de "
+            "2 ou mais professores diferentes e com média geral maior ou igual a 8.5. "
+            "Ordene da maior média para a menor e pelo nome do aluno."
+        ),
+        dica="Conecte alunos -> alunos_disciplinas -> disciplinas -> notas e filtre com HAVING COUNT(DISTINCT d.professor_id) >= 2 AND AVG(n.nota) >= 8.5.",
+        solucao_sql=(
+            "SELECT\n"
+            "    a.nome,\n"
+            "    COUNT(DISTINCT d.professor_id) AS qtd_professores,\n"
+            "    ROUND(AVG(n.nota), 2) AS media_geral\n"
+            "FROM alunos a\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
+            "INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
+            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
+            "GROUP BY a.id, a.nome\n"
+            "HAVING COUNT(DISTINCT d.professor_id) >= 2 AND AVG(n.nota) >= 8.5\n"
+            "ORDER BY media_geral DESC, a.nome ASC;"
+        ),
+        ordem_importa=True,
+        topicos=("COUNT(DISTINCT)", "HAVING", "Múltiplos JOINs"),
     ),
 )
 

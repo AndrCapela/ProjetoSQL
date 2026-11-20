@@ -66,5 +66,19 @@ def test_professor_disciplina_and_aluno_disciplina_relationships(tmp_path: Path)
 
         assert len(multi_disc_aluno) > 10
         assert len(multi_aluno_disc) >= 8
+
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%';"
+            ).fetchall()
+        }
+        assert {
+            "idx_disciplinas_curso_id",
+            "idx_disciplinas_professor_id",
+            "idx_alunos_disciplinas_aluno_id",
+            "idx_alunos_disciplinas_disciplina_id",
+            "idx_notas_aluno_disciplina_id",
+        }.issubset(indexes)
     finally:
         conn.close()

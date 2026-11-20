@@ -35,3 +35,7 @@ Plataforma web em **FastAPI + SQLite** para praticar consultas SQL (`SELECT` / `
 ```bash
 python -m pytest -v
 ```
+
+## Documentação Técnica
+
+Consulte [docs/DOCUMENTACAO.md](docs/DOCUMENTACAO.md) para detalhes da arquitetura, classes/modelos, diagrama ER do banco de dados e histórico de melhorias.

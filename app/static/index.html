@@ -250,11 +250,15 @@
                   <div class="expected-sql-header">
                     <span>Query SQL Correta</span>
                     <div class="expected-sql-actions">
-                      <button id="copy-expected-sql-btn" class="btn btn-ghost tiny">Copiar</button>
-                      <button id="use-expected-sql-btn" class="btn btn-ghost tiny">Carregar no editor</button>
+                      <button id="toggle-expected-sql-btn" class="btn btn-ghost tiny">Revelar solução</button>
+                      <button id="copy-expected-sql-btn" class="btn btn-ghost tiny hidden">Copiar</button>
+                      <button id="use-expected-sql-btn" class="btn btn-ghost tiny hidden">Carregar no editor</button>
                     </div>
                   </div>
-                  <pre id="expected-sql-code" class="expected-sql-code"></pre>
+                  <p id="expected-sql-hidden-msg" class="expected-sql-hidden-msg">
+                    Compare seu resultado com a tabela abaixo. Clique em <strong>Revelar solução</strong> se quiser ver a query SQL do gabarito.
+                  </p>
+                  <pre id="expected-sql-code" class="expected-sql-code hidden"></pre>
                 </div>
                 <div id="expected-table-wrap" class="table-scroll"></div>
               </div>

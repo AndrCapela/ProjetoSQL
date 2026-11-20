@@ -67,6 +67,12 @@ CREATE TABLE notas (
     data_avaliacao TEXT NOT NULL,
     FOREIGN KEY (aluno_disciplina_id) REFERENCES alunos_disciplinas(id)
 );
+
+CREATE INDEX idx_disciplinas_curso_id ON disciplinas(curso_id);
+CREATE INDEX idx_disciplinas_professor_id ON disciplinas(professor_id);
+CREATE INDEX idx_alunos_disciplinas_aluno_id ON alunos_disciplinas(aluno_id);
+CREATE INDEX idx_alunos_disciplinas_disciplina_id ON alunos_disciplinas(disciplina_id);
+CREATE INDEX idx_notas_aluno_disciplina_id ON notas(aluno_disciplina_id);
 """
 
 PROFESSORES_SEED = [

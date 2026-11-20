@@ -20,8 +20,8 @@ def test_challenge_distribution_and_unique_ids() -> None:
     ids = [c.id for c in CHALLENGES]
     assert len(ids) == len(set(ids))
     assert len(list_challenges("facil")) == 10
-    assert len(list_challenges("medio")) == 10
-    assert len(list_challenges("dificil")) == 10
+    assert len(list_challenges("medio")) == 15
+    assert len(list_challenges("dificil")) == 15
 
 
 @pytest.mark.parametrize("challenge", CHALLENGES, ids=lambda c: c.id)
@@ -49,3 +49,25 @@ def test_alternative_queries_for_same_challenge_pass(db_path: Path) -> None:
         db_path=db_path,
     )
     assert compare_results(alt_not_exists, expected, order_matters=False).is_correct is True
+
+    # Desafio dificil-11: NOT EXISTS deve equivaler ao HAVING COUNT = SUM(CASE WHEN ...)
+    expected_11 = execute_readonly_sql(
+        next(c.solucao_sql for c in CHALLENGES if c.id == "dificil-11"),
+        db_path=db_path,
+    )
+    alt_11 = execute_readonly_sql(
+        """
+        SELECT a.id, a.nome, COUNT(ad.id) AS total_concluidas
+        FROM alunos a
+        INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM alunos_disciplinas ad2
+            WHERE ad2.aluno_id = a.id AND ad2.status != 'concluida'
+        )
+        GROUP BY a.id, a.nome
+        ORDER BY total_concluidas DESC, a.nome ASC;
+        """,
+        db_path=db_path,
+    )
+    assert compare_results(alt_11, expected_11, order_matters=True).is_correct is True

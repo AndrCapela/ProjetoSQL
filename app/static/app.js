@@ -12,6 +12,23 @@
     dificil: "Difícil",
   };
 
+  function storageGetJson(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function storageSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // Ignora indisponibilidade de storage em modo privado restrito
+    }
+  }
+
   const state = {
     mode: "challenge", // "challenge" | "free"
     level: "facil",
@@ -19,10 +36,11 @@
     schema: [],
     challenges: [],
     currentChallenge: null,
-    solvedIds: new Set(JSON.parse(localStorage.getItem(STORAGE_SOLVED_KEY) || "[]")),
-    history: JSON.parse(localStorage.getItem(STORAGE_HISTORY_KEY) || "[]"),
-    drafts: JSON.parse(localStorage.getItem(STORAGE_DRAFTS_KEY) || "{}"),
+    solvedIds: new Set(storageGetJson(STORAGE_SOLVED_KEY, [])),
+    history: storageGetJson(STORAGE_HISTORY_KEY, []),
+    drafts: storageGetJson(STORAGE_DRAFTS_KEY, {}),
     lastExpectedSql: "",
+    expectedSqlRevealed: false,
     tables: {
       user: createTableState(),
       expected: createTableState(),
@@ -67,7 +85,7 @@
   }
 
   function saveSolved() {
-    localStorage.setItem(STORAGE_SOLVED_KEY, JSON.stringify([...state.solvedIds]));
+    storageSet(STORAGE_SOLVED_KEY, JSON.stringify([...state.solvedIds]));
   }
 
   function getActiveDraftKey() {
@@ -78,7 +96,7 @@
   function saveCurrentDraft() {
     const key = getActiveDraftKey();
     state.drafts[key] = $("sql-input").value;
-    localStorage.setItem(STORAGE_DRAFTS_KEY, JSON.stringify(state.drafts));
+    storageSet(STORAGE_DRAFTS_KEY, JSON.stringify(state.drafts));
   }
 
   function restoreCurrentDraft() {
@@ -89,7 +107,12 @@
 
   // ==================== THEME ====================
   function initTheme() {
-    const saved = localStorage.getItem(STORAGE_THEME_KEY) || "dark";
+    let saved = "dark";
+    try {
+      saved = localStorage.getItem(STORAGE_THEME_KEY) || "dark";
+    } catch {
+      saved = "dark";
+    }
     applyTheme(saved);
     $("theme-toggle-btn").addEventListener("click", () => {
       const current = document.documentElement.getAttribute("data-theme");
@@ -99,7 +122,7 @@
 
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem(STORAGE_THEME_KEY, theme);
+    storageSet(STORAGE_THEME_KEY, theme);
     $("theme-toggle-btn").textContent = theme === "dark" ? "☀" : "☾";
   }
 
@@ -240,7 +263,39 @@
     }
   }
 
+  function setExpectedSqlVisible(visible) {
+    state.expectedSqlRevealed = Boolean(visible);
+    $("expected-sql-code").classList.toggle("hidden", !state.expectedSqlRevealed);
+    $("expected-sql-hidden-msg").classList.toggle("hidden", state.expectedSqlRevealed);
+    $("copy-expected-sql-btn").classList.toggle("hidden", !state.expectedSqlRevealed);
+    $("use-expected-sql-btn").classList.toggle("hidden", !state.expectedSqlRevealed);
+    $("toggle-expected-sql-btn").textContent = state.expectedSqlRevealed
+      ? "Ocultar solução"
+      : "Revelar solução";
+  }
+
+  function resetResultsView() {
+    $("feedback-banner").classList.add("hidden");
+    $("dual-results-grid").classList.add("hidden");
+    $("empty-results-state").classList.remove("hidden");
+    $("user-error-box").classList.add("hidden");
+    $("user-error-hint-box").classList.add("hidden");
+    $("user-table-wrap").innerHTML = "";
+    $("expected-table-wrap").innerHTML = "";
+    $("user-pagination").innerHTML = "";
+    $("expected-pagination").innerHTML = "";
+    $("user-stats").textContent = "";
+    $("expected-stats").textContent = "";
+    $("user-diff-chip").classList.add("hidden");
+    $("expected-diff-chip").classList.add("hidden");
+    $("expected-sql-code").textContent = "";
+    state.lastExpectedSql = "";
+    setExpectedSqlVisible(false);
+  }
+
   function selectChallenge(challenge) {
+    const previousId = state.currentChallenge ? state.currentChallenge.id : null;
+    const nextId = challenge ? challenge.id : null;
     state.currentChallenge = challenge;
     if (challenge) {
       $("challenge-select").value = challenge.id;
@@ -250,6 +305,9 @@
     renderCurrentChallenge();
     if (state.mode === "challenge") {
       restoreCurrentDraft();
+      if (previousId !== null && previousId !== nextId) {
+        resetResultsView();
+      }
     }
   }
 
@@ -278,6 +336,7 @@
   }
 
   function setMode(mode) {
+    const modeChanged = state.mode !== mode;
     state.mode = mode;
     const isChallenge = mode === "challenge";
 
@@ -297,6 +356,9 @@
       $("expected-result-pane").classList.remove("hidden");
       $("results-resizer").classList.remove("hidden");
       $("user-result-pane").classList.remove("single-full");
+    }
+    if (modeChanged) {
+      resetResultsView();
     }
     restoreCurrentDraft();
   }
@@ -333,7 +395,16 @@
       formatted = formatted.replace(re, "\n$1");
     });
 
+    // Protege BETWEEN ... AND ... para não quebrar linha no AND do intervalo
+    const betweenPlaceholders = [];
+    formatted = formatted.replace(/\bBETWEEN\s+\S+\s+AND\s+\S+/g, (m) => {
+      const idx = betweenPlaceholders.length;
+      betweenPlaceholders.push(m);
+      return `__SQL_BETWEEN_${idx}__`;
+    });
+
     formatted = formatted.replace(/\s+(AND|OR)\b/g, "\n    $1");
+    formatted = formatted.replace(/__SQL_BETWEEN_(\d+)__/g, (_, i) => betweenPlaceholders[Number(i)]);
     formatted = formatted.replace(/__SQL_PH_(\d+)__/g, (_, i) => placeholders[Number(i)]);
     return formatted;
   }
@@ -467,7 +538,7 @@
     const normalized = sql.trim();
     if (!normalized) return;
     state.history = [normalized, ...state.history.filter((q) => q !== normalized)].slice(0, 15);
-    localStorage.setItem(STORAGE_HISTORY_KEY, JSON.stringify(state.history));
+    storageSet(STORAGE_HISTORY_KEY, JSON.stringify(state.history));
     renderHistoryPopover();
   }
 
@@ -536,6 +607,7 @@
 
       state.lastExpectedSql = data.expected.sql;
       $("expected-sql-code").textContent = data.expected.sql;
+      setExpectedSqlVisible(Boolean(data.is_correct));
       hydrateResultTable("expected", data.expected.result, data.expected_row_status || null);
 
       if (data.is_correct) {
@@ -826,10 +898,18 @@
     });
     if (b.sortBy) params.set("sort_by", b.sortBy);
 
-    const data = await fetchJson(`/api/tables/${encodeURIComponent(b.table)}?${params.toString()}`);
-    $("browser-stats").textContent = `${data.table} • ${data.total_rows} registro(s)`;
-
     const wrap = $("browser-table-wrap");
+    let data;
+    try {
+      data = await fetchJson(`/api/tables/${encodeURIComponent(b.table)}?${params.toString()}`);
+    } catch (err) {
+      $("browser-stats").textContent = "Erro ao carregar";
+      wrap.innerHTML = `<div class="error-box">Erro ao carregar dados da tabela: ${escapeHtml(err.message)}</div>`;
+      $("browser-pagination").innerHTML = "";
+      return;
+    }
+
+    $("browser-stats").textContent = `${data.table} • ${data.total_rows} registro(s)`;
     wrap.innerHTML = buildTableHtml(data.columns, data.rows, b.sortBy, b.sortDir);
 
     wrap.querySelectorAll("th[data-col-name]").forEach((th) => {
@@ -944,13 +1024,15 @@
 
     const elements = [];
     state.schema.forEach((table) => {
-      const manyCard = $("der-grid").querySelector(`[data-der-table="${table.name}"]`);
+      const safeTable = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(table.name) : table.name;
+      const manyCard = $("der-grid").querySelector(`[data-der-table="${safeTable}"]`);
       if (!manyCard) return;
 
       table.columns.forEach((col) => {
         if (!col.foreign_key) return;
         const targetTable = col.foreign_key.split(".")[0];
-        const oneCard = $("der-grid").querySelector(`[data-der-table="${targetTable}"]`);
+        const safeTarget = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(targetTable) : targetTable;
+        const oneCard = $("der-grid").querySelector(`[data-der-table="${safeTarget}"]`);
         if (!oneCard) return;
 
         // toLocal converte coordenadas de viewport para coordenadas internas do canvas scrollável
@@ -1331,6 +1413,10 @@
       state.tables.expected.filter = e.target.value;
       state.tables.expected.page = 1;
       renderResultTable("expected");
+    });
+
+    $("toggle-expected-sql-btn").addEventListener("click", () => {
+      setExpectedSqlVisible(!state.expectedSqlRevealed);
     });
 
     $("copy-expected-sql-btn").addEventListener("click", async () => {

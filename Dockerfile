@@ -3,14 +3,16 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
-    PORT=7500
+    PORT=7500 \
+    TMPDIR=/tmp \
+    SQLITE_TMPDIR=/tmp
 
 WORKDIR /app
 
 # Instala apenas as dependências necessárias para produção
-COPY requirements.txt .
+COPY requirements-prod.txt .
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir fastapi "uvicorn[standard]" pydantic
+    && pip install --no-cache-dir -r requirements-prod.txt
 
 # Cria usuário não-root para executar a aplicação
 RUN groupadd --system appgroup \
