@@ -37,7 +37,9 @@
 
         <div id="challenge-picker-wrap" class="challenge-picker-wrap">
           <select id="topic-filter-select" aria-label="Filtrar por tópico" title="Filtrar desafios por tópico"></select>
+          <button id="prev-challenge-btn" type="button" class="icon-btn small" title="Desafio anterior" aria-label="Desafio anterior">‹</button>
           <select id="challenge-select" aria-label="Selecionar desafio"></select>
+          <button id="next-challenge-btn" type="button" class="icon-btn small" title="Próximo desafio" aria-label="Próximo desafio">›</button>
           <button id="random-challenge-btn" class="btn btn-ghost" title="Sortear outro desafio deste filtro">
             Sortear
           </button>
@@ -46,9 +48,12 @@
 
       <div class="topbar-right">
         <div class="progress-group">
-          <span id="progress-pill" class="progress-pill" title="Desafios resolvidos salvos no navegador">
-            0 / 0 resolvidos
-          </span>
+          <div class="progress-wrap">
+            <button id="progress-pill" type="button" class="progress-pill" title="Clique para ver progresso detalhado por nível">
+              0 / 0 resolvidos
+            </button>
+            <div id="progress-popover" class="progress-popover hidden"></div>
+          </div>
           <button id="reset-progress-btn" class="btn btn-ghost tiny" title="Limpar progresso de exercícios resolvidos">
             Zerar
           </button>
@@ -121,6 +126,13 @@
               (<code>professores</code>, <code>cursos</code>, <code>disciplinas</code>, <code>alunos</code>,
               <code>alunos_disciplinas</code> e <code>notas</code>).
             </p>
+            <div class="free-templates-row">
+              <span class="muted-small">Exemplos rápidos:</span>
+              <button type="button" class="btn btn-ghost tiny free-template-btn" data-template="top_notas">Top notas</button>
+              <button type="button" class="btn btn-ghost tiny free-template-btn" data-template="join_completo">JOIN aluno × disciplina</button>
+              <button type="button" class="btn btn-ghost tiny free-template-btn" data-template="media_disciplina">Média por disciplina</button>
+              <button type="button" class="btn btn-ghost tiny free-template-btn" data-template="cte_ranking">CTE + RANK()</button>
+            </div>
           </div>
 
           <!-- Editor SQL -->
@@ -128,7 +140,7 @@
             <div class="editor-toolbar">
               <div class="editor-toolbar-left">
                 <span class="editor-label">Editor SQL</span>
-                <span class="shortcut-hint">Ctrl + Enter para executar</span>
+                <span class="shortcut-hint">Ctrl + Enter executa • Ctrl + Espaço completa</span>
               </div>
               <div class="editor-toolbar-right">
                 <div class="history-wrap">
@@ -151,12 +163,19 @@
             </div>
             <div class="editor-body">
               <pre id="line-numbers" class="line-numbers" aria-hidden="true">1</pre>
-              <textarea
-                id="sql-input"
-                class="sql-textarea"
-                spellcheck="false"
-                placeholder="Ex: SELECT nome, idade, cidade FROM alunos WHERE idade > 30;"
-              ></textarea>
+              <div id="editor-stage" class="editor-stage">
+                <pre id="sql-highlight" class="sql-highlight" aria-hidden="true"></pre>
+                <textarea
+                  id="sql-input"
+                  class="sql-textarea"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                  placeholder="Ex: SELECT nome, idade, cidade FROM alunos WHERE idade > 30;"
+                ></textarea>
+                <div id="sql-autocomplete" class="sql-autocomplete hidden" role="listbox" aria-label="Sugestões SQL"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -169,7 +188,10 @@
           <!-- Banner de Feedback da Avaliação -->
           <div id="feedback-banner" class="feedback-banner hidden">
             <span id="feedback-icon" class="feedback-icon"></span>
-            <span id="feedback-text"></span>
+            <span id="feedback-text" class="feedback-text"></span>
+            <button id="banner-next-challenge-btn" type="button" class="btn btn-primary small banner-next-btn hidden">
+              Próximo desafio ›
+            </button>
           </div>
 
           <!-- Estado Inicial antes da primeira execução -->
@@ -202,6 +224,9 @@
                     placeholder="Filtrar linhas..."
                     aria-label="Filtrar seu resultado"
                   />
+                  <button id="export-csv-btn" type="button" class="btn btn-ghost tiny hidden" title="Exportar resultado visível em CSV">
+                    CSV
+                  </button>
                   <button class="icon-btn small pane-minimize-btn" data-target="user-result-pane" title="Minimizar/Restaurar">
                     −
                   </button>

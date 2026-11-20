@@ -102,6 +102,7 @@
   function restoreCurrentDraft() {
     const key = getActiveDraftKey();
     $("sql-input").value = state.drafts[key] || "";
+    hideAutocomplete();
     updateLineNumbers();
   }
 
@@ -145,6 +146,8 @@
     state.challenges = challenges;
     renderSchemaSidebar();
     renderChallengeControls();
+    updateProgressPill();
+    updateSqlHighlight();
     updateProgressPill();
   }
 
@@ -260,7 +263,43 @@
     } else {
       select.value = state.currentChallenge.id;
       renderCurrentChallenge();
+      updateChallengeNavButtons();
+      renderCurrentChallenge();
     }
+  }
+
+  function updateChallengeNavButtons() {
+    const list = getFilteredChallenges();
+    const idx = state.currentChallenge ? list.findIndex((c) => c.id === state.currentChallenge.id) : -1;
+    $("prev-challenge-btn").disabled = idx <= 0;
+    $("next-challenge-btn").disabled = idx === -1 || idx >= list.length - 1;
+  }
+
+  function goToAdjacentChallenge(delta) {
+    const list = getFilteredChallenges();
+    if (!list.length) return;
+    const idx = state.currentChallenge ? list.findIndex((c) => c.id === state.currentChallenge.id) : 0;
+    const next = list[idx + delta];
+    if (next) selectChallenge(next);
+  }
+
+  function getNextChallengeAction() {
+    const list = getFilteredChallenges();
+    const idx = state.currentChallenge ? list.findIndex((c) => c.id === state.currentChallenge.id) : -1;
+    if (idx !== -1 && idx + 1 < list.length) {
+      return { type: "challenge", challenge: list[idx + 1], label: "Próximo desafio ›" };
+    }
+    const levelsOrder = ["facil", "medio", "dificil"];
+    const lvlIdx = levelsOrder.indexOf(state.level);
+    if (state.topic === "ALL" && lvlIdx !== -1 && lvlIdx + 1 < levelsOrder.length) {
+      const nextLevel = levelsOrder[lvlIdx + 1];
+      return {
+        type: "level",
+        level: nextLevel,
+        label: `Avançar para ${LEVEL_LABELS[nextLevel]} ›`,
+      };
+    }
+    return null;
   }
 
   function setExpectedSqlVisible(visible) {
@@ -276,6 +315,8 @@
 
   function resetResultsView() {
     $("feedback-banner").classList.add("hidden");
+    $("banner-next-challenge-btn").classList.add("hidden");
+    $("export-csv-btn").classList.add("hidden");
     $("dual-results-grid").classList.add("hidden");
     $("empty-results-state").classList.remove("hidden");
     $("user-error-box").classList.add("hidden");
@@ -303,6 +344,7 @@
     $("challenge-hint-box").classList.add("hidden");
     $("toggle-hint-btn").textContent = "Ver dica";
     renderCurrentChallenge();
+    updateChallengeNavButtons();
     if (state.mode === "challenge") {
       restoreCurrentDraft();
       if (previousId !== null && previousId !== nextId) {
@@ -332,7 +374,50 @@
   }
 
   function updateProgressPill() {
-    $("progress-pill").textContent = `${state.solvedIds.size} / ${state.challenges.length} resolvidos`;
+    const pill = $("progress-pill");
+    pill.textContent = `${state.solvedIds.size} / ${state.challenges.length} resolvidos`;
+
+    const levels = ["facil", "medio", "dificil"];
+    const stats = levels.map((lvl) => {
+      const items = state.challenges.filter((c) => c.nivel === lvl);
+      const solved = items.filter((c) => state.solvedIds.has(c.id)).length;
+      return { lvl, label: LEVEL_LABELS[lvl], solved, total: items.length };
+    });
+
+    pill.title =
+      stats.map((s) => `${s.label}: ${s.solved}/${s.total}`).join(" • ") +
+      " (clique para detalhar)";
+
+    const pop = $("progress-popover");
+    pop.innerHTML = stats
+      .map((s) => {
+        const pct = s.total ? Math.round((s.solved / s.total) * 100) : 0;
+        return `
+          <button type="button" class="progress-level-btn" data-jump-level="${s.lvl}">
+            <div class="progress-level-head">
+              <span>${escapeHtml(s.label)}</span>
+              <span>${s.solved} / ${s.total} (${pct}%)</span>
+            </div>
+            <div class="progress-bar-track">
+              <div class="progress-bar-fill" style="width: ${pct}%"></div>
+            </div>
+          </button>
+        `;
+      })
+      .join("");
+
+    pop.querySelectorAll("[data-jump-level]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const lvl = btn.dataset.jumpLevel;
+        setMode("challenge");
+        document.querySelectorAll(".diff-pill").forEach((p) => {
+          p.classList.toggle("active", p.dataset.level === lvl);
+        });
+        state.level = lvl;
+        renderChallengeControls();
+        pop.classList.add("hidden");
+      });
+    });
   }
 
   function setMode(mode) {
@@ -349,6 +434,8 @@
 
     if (!isChallenge) {
       $("feedback-banner").classList.add("hidden");
+    $("banner-next-challenge-btn").classList.add("hidden");
+    $("export-csv-btn").classList.add("hidden");
       $("expected-result-pane").classList.add("hidden");
       $("results-resizer").classList.add("hidden");
       $("user-result-pane").classList.add("single-full");
@@ -409,10 +496,428 @@
     return formatted;
   }
 
+  const FREE_SQL_TEMPLATES = {
+    top_notas:
+      "SELECT\n    a.nome AS aluno,\n    d.nome AS disciplina,\n    n.avaliacao,\n    n.nota\nFROM notas n\nINNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nORDER BY n.nota DESC, a.nome ASC\nLIMIT 15;",
+    join_completo:
+      "SELECT\n    a.nome AS aluno,\n    c.nome AS curso,\n    d.nome AS disciplina,\n    p.nome AS professor,\n    ad.status\nFROM alunos_disciplinas ad\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nINNER JOIN cursos c ON c.id = d.curso_id\nINNER JOIN professores p ON p.id = d.professor_id\nORDER BY a.nome ASC, d.nome ASC;",
+    media_disciplina:
+      "SELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nFROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nGROUP BY d.id, d.codigo, d.nome\nORDER BY media_nota DESC;",
+    cte_ranking:
+      "WITH medias AS (\n    SELECT\n        a.nome,\n        ROUND(AVG(n.nota), 2) AS media_geral,\n        COUNT(n.id) AS qtd_notas\n    FROM alunos a\n    INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n    INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n    GROUP BY a.id, a.nome\n)\nSELECT\n    nome,\n    qtd_notas,\n    media_geral,\n    RANK() OVER (ORDER BY media_geral DESC) AS ranking\nFROM medias\nORDER BY ranking ASC, nome ASC\nLIMIT 10;",
+  };
+
+  const SQL_KEYWORDS = new Set([
+    "SELECT", "DISTINCT", "FROM", "INNER", "LEFT", "RIGHT", "CROSS", "JOIN", "ON",
+    "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "BETWEEN", "LIKE", "EXISTS",
+    "GROUP", "BY", "HAVING", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET", "AS",
+    "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION", "ALL",
+    "OVER", "PARTITION", "FILTER", "GLOB", "ESCAPE", "CAST", "EXPLAIN", "QUERY", "PLAN",
+  ]);
+
+  const SQL_FUNCTIONS = new Set([
+    "COUNT", "AVG", "SUM", "MIN", "MAX", "ROUND", "RANK", "DENSE_RANK", "ROW_NUMBER",
+    "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "STRFTIME", "DATE", "DATETIME",
+    "COALESCE", "IFNULL", "NULLIF", "LOWER", "UPPER", "LENGTH", "SUBSTR",
+    "TRIM", "LTRIM", "RTRIM", "REPLACE", "GROUP_CONCAT", "ABS", "TYPEOF", "PRINTF",
+  ]);
+
+  const AUTOCOMPLETE_SNIPPETS = [
+    { label: "SELECT", insert: "SELECT ", kind: "SQL" },
+    { label: "DISTINCT", insert: "DISTINCT ", kind: "SQL" },
+    { label: "FROM", insert: "FROM ", kind: "SQL" },
+    { label: "INNER JOIN", insert: "INNER JOIN ", kind: "SQL" },
+    { label: "LEFT JOIN", insert: "LEFT JOIN ", kind: "SQL" },
+    { label: "WHERE", insert: "WHERE ", kind: "SQL" },
+    { label: "GROUP BY", insert: "GROUP BY ", kind: "SQL" },
+    { label: "HAVING", insert: "HAVING ", kind: "SQL" },
+    { label: "ORDER BY", insert: "ORDER BY ", kind: "SQL" },
+    { label: "LIMIT", insert: "LIMIT ", kind: "SQL" },
+    { label: "WITH", insert: "WITH ", kind: "SQL" },
+    { label: "CASE WHEN", insert: "CASE WHEN ", kind: "SQL" },
+    { label: "BETWEEN", insert: "BETWEEN ", kind: "SQL" },
+    { label: "NOT EXISTS", insert: "NOT EXISTS ", kind: "SQL" },
+    { label: "IS NULL", insert: "IS NULL", kind: "SQL" },
+    { label: "IS NOT NULL", insert: "IS NOT NULL", kind: "SQL" },
+    { label: "COUNT(*)", insert: "COUNT(*)", kind: "Função" },
+    { label: "AVG()", insert: "AVG(", kind: "Função" },
+    { label: "SUM()", insert: "SUM(", kind: "Função" },
+    { label: "MIN()", insert: "MIN(", kind: "Função" },
+    { label: "MAX()", insert: "MAX(", kind: "Função" },
+    { label: "ROUND(, 2)", insert: "ROUND(", kind: "Função" },
+    { label: "RANK() OVER ()", insert: "RANK() OVER (", kind: "Função" },
+    { label: "DENSE_RANK() OVER ()", insert: "DENSE_RANK() OVER (", kind: "Função" },
+    { label: "strftime('%Y', )", insert: "strftime('%Y', ", kind: "Função" },
+    { label: "COALESCE()", insert: "COALESCE(", kind: "Função" },
+  ];
+
+  const acState = {
+    open: false,
+    items: [],
+    activeIndex: 0,
+    replaceStart: 0,
+  };
+
+  function highlightSqlToHtml(sql) {
+    const tableSet = new Set(state.schema.map((t) => t.name.toLowerCase()));
+    const out = [];
+    let i = 0;
+    const len = sql.length;
+
+    while (i < len) {
+      const ch = sql[i];
+      const nxt = i + 1 < len ? sql[i + 1] : "";
+
+      if (ch === "-" && nxt === "-") {
+        let end = i + 2;
+        while (end < len && sql[end] !== "\n") end += 1;
+        out.push(`<span class="tok-com">${escapeHtml(sql.slice(i, end))}</span>`);
+        i = end;
+        continue;
+      }
+
+      if (ch === "/" && nxt === "*") {
+        let end = i + 2;
+        while (end + 1 < len && !(sql[end] === "*" && sql[end + 1] === "/")) end += 1;
+        end = end + 1 < len ? end + 2 : len;
+        out.push(`<span class="tok-com">${escapeHtml(sql.slice(i, end))}</span>`);
+        i = end;
+        continue;
+      }
+
+      if (ch === "'") {
+        let end = i + 1;
+        while (end < len) {
+          if (sql[end] === "'") {
+            if (end + 1 < len && sql[end + 1] === "'") {
+              end += 2;
+              continue;
+            }
+            end += 1;
+            break;
+          }
+          end += 1;
+        }
+        out.push(`<span class="tok-str">${escapeHtml(sql.slice(i, end))}</span>`);
+        i = end;
+        continue;
+      }
+
+      if (ch === '"' || ch === "`") {
+        const quote = ch;
+        let end = i + 1;
+        while (end < len) {
+          if (sql[end] === quote) {
+            if (end + 1 < len && sql[end + 1] === quote) {
+              end += 2;
+              continue;
+            }
+            end += 1;
+            break;
+          }
+          end += 1;
+        }
+        out.push(escapeHtml(sql.slice(i, end)));
+        i = end;
+        continue;
+      }
+
+      if (/[0-9]/.test(ch)) {
+        let end = i + 1;
+        while (end < len && /[0-9.]/.test(sql[end])) end += 1;
+        out.push(`<span class="tok-num">${escapeHtml(sql.slice(i, end))}</span>`);
+        i = end;
+        continue;
+      }
+
+      if (/[A-Za-z_]/.test(ch)) {
+        let end = i + 1;
+        while (end < len && /[A-Za-z0-9_]/.test(sql[end])) end += 1;
+        const word = sql.slice(i, end);
+        const upper = word.toUpperCase();
+        if (SQL_KEYWORDS.has(upper)) {
+          out.push(`<span class="tok-kw">${escapeHtml(word)}</span>`);
+        } else if (SQL_FUNCTIONS.has(upper)) {
+          out.push(`<span class="tok-fn">${escapeHtml(word)}</span>`);
+        } else if (tableSet.has(word.toLowerCase())) {
+          out.push(`<span class="tok-tbl">${escapeHtml(word)}</span>`);
+        } else {
+          out.push(escapeHtml(word));
+        }
+        i = end;
+        continue;
+      }
+
+      out.push(escapeHtml(ch));
+      i += 1;
+    }
+
+    if (sql.endsWith("\n")) {
+      out.push(" ");
+    }
+    return out.join("");
+  }
+
+  function syncEditorScroll() {
+    const textarea = $("sql-input");
+    const highlight = $("sql-highlight");
+    $("line-numbers").scrollTop = textarea.scrollTop;
+    highlight.scrollTop = textarea.scrollTop;
+    highlight.scrollLeft = textarea.scrollLeft;
+  }
+
+  function updateSqlHighlight() {
+    const textarea = $("sql-input");
+    const highlight = $("sql-highlight");
+    if (!textarea || !highlight) return;
+    highlight.innerHTML = highlightSqlToHtml(textarea.value);
+    syncEditorScroll();
+  }
+
+  function extractTableAliases(sql) {
+    const aliases = new Map();
+    const tableSet = new Set(state.schema.map((t) => t.name.toLowerCase()));
+    const re = /\b(?:FROM|JOIN)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?/gi;
+    let match;
+    while ((match = re.exec(sql)) !== null) {
+      const tbl = match[1].toLowerCase();
+      if (!tableSet.has(tbl)) continue;
+      aliases.set(tbl, tbl);
+      if (match[2] && !SQL_KEYWORDS.has(match[2].toUpperCase())) {
+        aliases.set(match[2].toLowerCase(), tbl);
+      }
+    }
+    return aliases;
+  }
+
+  function isInsideStringOrComment(text) {
+    let inSingle = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const ch = text[i];
+      const nxt = text[i + 1] || "";
+      if (inLineComment) {
+        if (ch === "\n") inLineComment = false;
+        continue;
+      }
+      if (inBlockComment) {
+        if (ch === "*" && nxt === "/") {
+          inBlockComment = false;
+          i += 1;
+        }
+        continue;
+      }
+      if (inSingle) {
+        if (ch === "'") {
+          if (nxt === "'") {
+            i += 1;
+          } else {
+            inSingle = false;
+          }
+        }
+        continue;
+      }
+      if (ch === "-" && nxt === "-") {
+        inLineComment = true;
+        i += 1;
+      } else if (ch === "/" && nxt === "*") {
+        inBlockComment = true;
+        i += 1;
+      } else if (ch === "'") {
+        inSingle = true;
+      }
+    }
+    return inSingle || inLineComment || inBlockComment;
+  }
+
+  function getCaretCoordinates(textarea, position) {
+    const mirror = document.createElement("div");
+    const style = window.getComputedStyle(textarea);
+    const props = [
+      "boxSizing", "width", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+      "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "tabSize",
+      "whiteSpace", "fontVariantLigatures",
+    ];
+    mirror.style.position = "absolute";
+    mirror.style.visibility = "hidden";
+    mirror.style.pointerEvents = "none";
+    mirror.style.top = "0";
+    mirror.style.left = "-9999px";
+    props.forEach((p) => {
+      mirror.style[p] = style[p];
+    });
+    mirror.textContent = textarea.value.slice(0, position);
+    const marker = document.createElement("span");
+    marker.textContent = "|";
+    mirror.appendChild(marker);
+    document.body.appendChild(mirror);
+    const coords = {
+      top: marker.offsetTop - textarea.scrollTop,
+      left: marker.offsetLeft - textarea.scrollLeft,
+      lineHeight: parseFloat(style.lineHeight) || 21,
+    };
+    document.body.removeChild(mirror);
+    return coords;
+  }
+
+  function hideAutocomplete() {
+    acState.open = false;
+    acState.items = [];
+    acState.activeIndex = 0;
+    const pop = $("sql-autocomplete");
+    if (pop) pop.classList.add("hidden");
+  }
+
+  function buildAutocompleteCandidates(textarea, forceOpen) {
+    const cursor = textarea.selectionStart;
+    if (cursor !== textarea.selectionEnd) return null;
+
+    const before = textarea.value.slice(0, cursor);
+    if (isInsideStringOrComment(before)) return null;
+
+    const dotMatch = before.match(/([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z0-9_]*)$/);
+    if (dotMatch) {
+      const qualifier = dotMatch[1].toLowerCase();
+      const prefix = dotMatch[2].toLowerCase();
+      const aliases = extractTableAliases(textarea.value);
+      const targetTableName = aliases.get(qualifier) || qualifier;
+      const tableObj = state.schema.find((t) => t.name.toLowerCase() === targetTableName);
+      if (!tableObj) return null;
+
+      const cols = tableObj.columns
+        .filter((c) => !prefix || c.name.toLowerCase().includes(prefix))
+        .sort((a, b) => {
+          const ap = a.name.toLowerCase().startsWith(prefix) ? 0 : 1;
+          const bp = b.name.toLowerCase().startsWith(prefix) ? 0 : 1;
+          return ap - bp || a.name.localeCompare(b.name);
+        })
+        .slice(0, 10)
+        .map((c) => ({
+          label: c.name,
+          insert: c.name,
+          kind: tableObj.name,
+        }));
+
+      return cols.length ? { items: cols, replaceStart: cursor - dotMatch[2].length } : null;
+    }
+
+    const wordMatch = before.match(/([A-Za-z_][A-Za-z0-9_]*)$/);
+    const prefix = wordMatch ? wordMatch[1] : "";
+    if (!forceOpen && prefix.length < 2) return null;
+
+    const lower = prefix.toLowerCase();
+    const seen = new Set();
+    const pool = [];
+
+    state.schema.forEach((tbl) => {
+      if (!seen.has(`t:${tbl.name}`)) {
+        seen.add(`t:${tbl.name}`);
+        pool.push({ label: tbl.name, insert: tbl.name, kind: "Tabela" });
+      }
+      tbl.columns.forEach((col) => {
+        const key = `c:${col.name}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          pool.push({ label: col.name, insert: col.name, kind: tbl.name });
+        }
+      });
+    });
+
+    AUTOCOMPLETE_SNIPPETS.forEach((s) => {
+      if (!seen.has(`k:${s.label}`)) {
+        seen.add(`k:${s.label}`);
+        pool.push(s);
+      }
+    });
+
+    const filtered = pool
+      .filter((item) => !lower || item.label.toLowerCase().includes(lower))
+      .filter((item) => forceOpen || item.label.toLowerCase() !== lower)
+      .sort((a, b) => {
+        const ap = lower && a.label.toLowerCase().startsWith(lower) ? 0 : 1;
+        const bp = lower && b.label.toLowerCase().startsWith(lower) ? 0 : 1;
+        return ap - bp || a.label.localeCompare(b.label);
+      })
+      .slice(0, 10);
+
+    return filtered.length ? { items: filtered, replaceStart: cursor - prefix.length } : null;
+  }
+
+  function renderAutocompletePopover(textarea) {
+    const pop = $("sql-autocomplete");
+    const stage = $("editor-stage");
+    if (!acState.open || !acState.items.length) {
+      pop.classList.add("hidden");
+      return;
+    }
+
+    pop.innerHTML = acState.items
+      .map(
+        (item, idx) => `
+          <button
+            type="button"
+            class="autocomplete-item ${idx === acState.activeIndex ? "active" : ""}"
+            data-ac-idx="${idx}"
+            role="option"
+            aria-selected="${idx === acState.activeIndex}"
+          >
+            <span>${escapeHtml(item.label)}</span>
+            <span class="autocomplete-kind">${escapeHtml(item.kind)}</span>
+          </button>
+        `
+      )
+      .join("");
+
+    const coords = getCaretCoordinates(textarea, textarea.selectionStart);
+    const maxLeft = Math.max(8, stage.clientWidth - 250);
+    const maxTop = Math.max(8, stage.clientHeight - 180);
+    pop.style.left = `${Math.min(Math.max(8, coords.left), maxLeft)}px`;
+    pop.style.top = `${Math.min(Math.max(8, coords.top + coords.lineHeight + 4), maxTop)}px`;
+    pop.classList.remove("hidden");
+
+    pop.querySelectorAll(".autocomplete-item").forEach((btn) => {
+      btn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        applyAutocompleteItem(Number(btn.dataset.acIdx));
+      });
+    });
+  }
+
+  function updateAutocomplete(forceOpen = false) {
+    const textarea = $("sql-input");
+    const built = buildAutocompleteCandidates(textarea, forceOpen);
+    if (!built) {
+      hideAutocomplete();
+      return;
+    }
+    acState.open = true;
+    acState.items = built.items;
+    acState.activeIndex = 0;
+    acState.replaceStart = built.replaceStart;
+    renderAutocompletePopover(textarea);
+  }
+
+  function applyAutocompleteItem(index) {
+    const item = acState.items[index];
+    if (!item) return;
+    const textarea = $("sql-input");
+    const before = textarea.value.slice(0, acState.replaceStart);
+    const after = textarea.value.slice(textarea.selectionEnd);
+    textarea.value = before + item.insert + after;
+    const nextPos = before.length + item.insert.length;
+    textarea.setSelectionRange(nextPos, nextPos);
+    hideAutocomplete();
+    updateLineNumbers();
+    saveCurrentDraft();
+    textarea.focus();
+  }
+
   function updateLineNumbers() {
     const textarea = $("sql-input");
     const lines = textarea.value.split("\n").length;
     $("line-numbers").textContent = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+    updateSqlHighlight();
   }
 
   function insertAtCursor(text) {
@@ -434,15 +939,49 @@
     textarea.addEventListener("input", () => {
       updateLineNumbers();
       saveCurrentDraft();
+      updateAutocomplete(false);
     });
-    textarea.addEventListener("scroll", () => {
-      $("line-numbers").scrollTop = textarea.scrollTop;
+    textarea.addEventListener("scroll", syncEditorScroll);
+    textarea.addEventListener("blur", () => {
+      setTimeout(hideAutocomplete, 120);
     });
     textarea.addEventListener("keydown", (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
+        hideAutocomplete();
         runQuery();
-      } else if (e.key === "Tab") {
+        return;
+      }
+      if (e.ctrlKey && e.code === "Space") {
+        e.preventDefault();
+        updateAutocomplete(true);
+        return;
+      }
+      if (acState.open) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          acState.activeIndex = (acState.activeIndex + 1) % acState.items.length;
+          renderAutocompletePopover(textarea);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          acState.activeIndex = (acState.activeIndex - 1 + acState.items.length) % acState.items.length;
+          renderAutocompletePopover(textarea);
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          applyAutocompleteItem(acState.activeIndex);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          hideAutocomplete();
+          return;
+        }
+      }
+      if (e.key === "Tab") {
         e.preventDefault();
         insertAtCursor("    ");
       }
@@ -517,6 +1056,7 @@
         $("user-error-box").textContent = data.error;
         $("user-table-wrap").innerHTML = "";
         $("user-stats").textContent = "Erro";
+        $("export-csv-btn").classList.add("hidden");
         showFeedback("error", "✕", data.error);
       } else {
         $("user-error-box").classList.add("hidden");
@@ -571,6 +1111,7 @@
     banner.className = `feedback-banner ${type}`;
     $("feedback-icon").textContent = icon;
     $("feedback-text").textContent = message;
+    $("banner-next-challenge-btn").classList.add("hidden");
   }
 
   function renderExecutionResponse(data) {
@@ -594,6 +1135,7 @@
       $("user-stats").textContent = "Erro";
       $("user-diff-chip").classList.add("hidden");
       $("user-pagination").innerHTML = "";
+      $("export-csv-btn").classList.add("hidden");
     } else if (data.user_result) {
       userErrorBox.classList.add("hidden");
       userErrorHintBox.classList.add("hidden");
@@ -612,11 +1154,21 @@
 
       if (data.is_correct) {
         showFeedback("success", "✓", data.feedback);
+        const nextAction = getNextChallengeAction();
+        const nextBtn = $("banner-next-challenge-btn");
+        if (nextAction) {
+          nextBtn.textContent = nextAction.label;
+          nextBtn.classList.remove("hidden");
+        } else {
+          nextBtn.classList.add("hidden");
+        }
         if (data.challenge_id) {
           state.solvedIds.add(data.challenge_id);
           saveSolved();
           updateProgressPill();
           renderChallengeControls();
+    updateProgressPill();
+    updateSqlHighlight();
         }
       } else if (data.user_error) {
         showFeedback("error", "✕", data.feedback);
@@ -683,20 +1235,14 @@
     const truncTag = tState.truncated ? " (limite 500)" : "";
     $(`${key}-stats`).textContent = `${tState.rowCount} linha(s)${truncTag} • ${tState.executionMs} ms`;
     updateDiffChip(key, rowStatuses);
+    if (key === "user") {
+      $("export-csv-btn").classList.toggle("hidden", !tState.columns.length);
+    }
     renderResultTable(key);
   }
 
-  function renderResultTable(key) {
+  function getWorkingResultItems(key) {
     const tState = state.tables[key];
-    const wrap = $(`${key}-table-wrap`);
-    const footer = $(`${key}-pagination`);
-
-    if (!tState.columns.length) {
-      wrap.innerHTML = `<p class="empty-table-msg">Nenhuma coluna retornada.</p>`;
-      footer.innerHTML = "";
-      return;
-    }
-
     let workingItems = tState.rows.map((cells, idx) => ({
       cells,
       status: tState.rowStatuses ? tState.rowStatuses[idx] : null,
@@ -716,6 +1262,54 @@
         (a, b) => compareCells(a.cells[idx], b.cells[idx]) * dir
       );
     }
+    return workingItems;
+  }
+
+  function exportUserCsv() {
+    const tState = state.tables.user;
+    if (!tState.columns.length) return;
+    const items = getWorkingResultItems("user");
+
+    const escapeCsvCell = (val) => {
+      if (val === null || val === undefined) return "";
+      const text = String(val);
+      if (/[",;\n\r]/.test(text)) {
+        return `"${text.replace(/"/g, '""')}"`;
+      }
+      return text;
+    };
+
+    const lines = [
+      tState.columns.map(escapeCsvCell).join(","),
+      ...items.map((item) => item.cells.map(escapeCsvCell).join(",")),
+    ];
+    const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const filename =
+      state.mode === "challenge" && state.currentChallenge
+        ? `${state.currentChallenge.id}.csv`
+        : "resultado-sql.csv";
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function renderResultTable(key) {
+    const tState = state.tables[key];
+    const wrap = $(`${key}-table-wrap`);
+    const footer = $(`${key}-pagination`);
+
+    if (!tState.columns.length) {
+      wrap.innerHTML = `<p class="empty-table-msg">Nenhuma coluna retornada.</p>`;
+      footer.innerHTML = "";
+      return;
+    }
+
+    const workingItems = getWorkingResultItems(key);
 
     const total = workingItems.length;
     const totalPages = Math.max(1, Math.ceil(total / tState.pageSize));
@@ -1255,6 +1849,8 @@
         if (!$("der-backdrop").classList.contains("hidden")) closeDerModal();
         if (!$("guide-backdrop").classList.contains("hidden")) closeGuideModal();
         $("history-popover").classList.add("hidden");
+        $("progress-popover").classList.add("hidden");
+        hideAutocomplete();
       }
     });
   }
@@ -1337,13 +1933,52 @@
         pill.classList.add("active");
         state.level = pill.dataset.level;
         renderChallengeControls();
+    updateProgressPill();
+    updateSqlHighlight();
       });
     });
 
     $("topic-filter-select").addEventListener("change", (e) => {
       state.topic = e.target.value;
       renderChallengeControls();
+    updateProgressPill();
+    updateSqlHighlight();
     });
+
+    $("prev-challenge-btn").addEventListener("click", () => goToAdjacentChallenge(-1));
+    $("next-challenge-btn").addEventListener("click", () => goToAdjacentChallenge(1));
+
+    $("banner-next-challenge-btn").addEventListener("click", () => {
+      const action = getNextChallengeAction();
+      if (!action) return;
+      if (action.type === "challenge") {
+        selectChallenge(action.challenge);
+      } else if (action.type === "level") {
+        document.querySelectorAll(".diff-pill").forEach((p) => {
+          p.classList.toggle("active", p.dataset.level === action.level);
+        });
+        state.level = action.level;
+        renderChallengeControls();
+      }
+    });
+
+    $("progress-pill").addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("progress-popover").classList.toggle("hidden");
+    });
+
+    document.querySelectorAll(".free-template-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sql = FREE_SQL_TEMPLATES[btn.dataset.template];
+        if (!sql) return;
+        $("sql-input").value = sql;
+        updateLineNumbers();
+        saveCurrentDraft();
+        $("sql-input").focus();
+      });
+    });
+
+    $("export-csv-btn").addEventListener("click", exportUserCsv);
 
     $("challenge-select").addEventListener("change", (e) => {
       const found = state.challenges.find((c) => c.id === e.target.value);
@@ -1357,6 +1992,8 @@
       saveSolved();
       updateProgressPill();
       renderChallengeControls();
+    updateProgressPill();
+    updateSqlHighlight();
     });
 
     $("random-challenge-btn").addEventListener("click", () => {
@@ -1400,6 +2037,12 @@
     document.addEventListener("click", (e) => {
       if (!e.target.closest(".history-wrap")) {
         $("history-popover").classList.add("hidden");
+      }
+      if (!e.target.closest(".progress-wrap")) {
+        $("progress-popover").classList.add("hidden");
+      }
+      if (!e.target.closest(".editor-stage")) {
+        hideAutocomplete();
       }
     });
 
