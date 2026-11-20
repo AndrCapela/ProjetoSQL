@@ -53,6 +53,18 @@
       sortBy: null,
       sortDir: "asc",
     },
+    lastExecution: {
+      error: null,
+      feedback: null,
+      resultSummary: null,
+    },
+    chat: {
+      open: false,
+      sending: false,
+      enabled: true,
+      model: "gemini-3.5-flash-lite",
+      messages: [],
+    },
   };
 
   function createTableState() {
@@ -131,7 +143,16 @@
   async function fetchJson(url, options = {}) {
     const res = await fetch(url, options);
     if (!res.ok) {
-      const detail = await res.text();
+      const raw = await res.text();
+      let detail = raw;
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.detail === "string") {
+          detail = parsed.detail;
+        }
+      } catch {
+        // Mantém texto bruto caso não seja JSON
+      }
       throw new Error(detail || `Erro HTTP ${res.status}`);
     }
     return res.json();
@@ -331,6 +352,7 @@
     $("expected-diff-chip").classList.add("hidden");
     $("expected-sql-code").textContent = "";
     state.lastExpectedSql = "";
+    state.lastExecution = { error: null, feedback: null, resultSummary: null };
     setExpectedSqlVisible(false);
   }
 
@@ -1052,13 +1074,20 @@
       $("user-error-hint-box").classList.add("hidden");
 
       if (data.error) {
+        state.lastExecution = { error: data.error, feedback: null, resultSummary: null };
         $("user-error-box").classList.remove("hidden");
         $("user-error-box").textContent = data.error;
         $("user-table-wrap").innerHTML = "";
         $("user-stats").textContent = "Erro";
         $("export-csv-btn").classList.add("hidden");
         showFeedback("error", "✕", data.error);
+        $("banner-ask-tutor-btn").classList.remove("hidden");
       } else {
+        state.lastExecution = {
+          error: null,
+          feedback: null,
+          resultSummary: summarizeResultForTutor(data.result),
+        };
         $("user-error-box").classList.add("hidden");
         hydrateResultTable("user", data.result, null);
         showFeedback(
@@ -1112,11 +1141,24 @@
     $("feedback-icon").textContent = icon;
     $("feedback-text").textContent = message;
     $("banner-next-challenge-btn").classList.add("hidden");
+    $("banner-ask-tutor-btn").classList.add("hidden");
+  }
+
+  function summarizeResultForTutor(result) {
+    if (!result || !result.columns || !result.columns.length) return null;
+    const sample = (result.rows || []).slice(0, 3).map((r) => JSON.stringify(r)).join("; ");
+    return `Colunas: [${result.columns.join(", ")}] | ${result.row_count} linha(s)${sample ? ` | Amostra: ${sample}` : ""}`;
   }
 
   function renderExecutionResponse(data) {
     $("empty-results-state").classList.add("hidden");
     $("dual-results-grid").classList.remove("hidden");
+
+    state.lastExecution = {
+      error: data.user_error || null,
+      feedback: data.feedback || null,
+      resultSummary: summarizeResultForTutor(data.user_result),
+    };
 
     // Resultado do usuário
     const userErrorBox = $("user-error-box");
@@ -1172,8 +1214,10 @@
         }
       } else if (data.user_error) {
         showFeedback("error", "✕", data.feedback);
+        $("banner-ask-tutor-btn").classList.remove("hidden");
       } else {
         showFeedback("warning", "!", data.feedback);
+        $("banner-ask-tutor-btn").classList.remove("hidden");
       }
     } else {
       $("expected-result-pane").classList.add("hidden");
@@ -1183,6 +1227,7 @@
 
       if (data.user_error) {
         showFeedback("error", "✕", data.user_error);
+        $("banner-ask-tutor-btn").classList.remove("hidden");
       } else {
         showFeedback(
           "success",
@@ -1851,6 +1896,7 @@
         $("history-popover").classList.add("hidden");
         $("progress-popover").classList.add("hidden");
         hideAutocomplete();
+        if (state.chat.open) closeChatDrawer();
       }
     });
   }
@@ -2098,6 +2144,189 @@
     });
   }
 
+  // ==================== CHAT TUTOR SQL (GEMINI) ====================
+  function formatChatMarkdown(text) {
+    const codeBlocks = [];
+    const withPlaceholders = String(text || "").replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_, code) => {
+      const idx = codeBlocks.length;
+      codeBlocks.push(`<pre class="chat-code-block">${escapeHtml(code.trim())}</pre>`);
+      return `__CHAT_CODE_${idx}__`;
+    });
+
+    let html = escapeHtml(withPlaceholders)
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\n/g, "<br>");
+
+    html = html.replace(/__CHAT_CODE_(\d+)__/g, (_, i) => codeBlocks[Number(i)]);
+    return html;
+  }
+
+  function updateChatContextLabel() {
+    const label = $("chat-context-label");
+    if (!label) return;
+    const parts = [];
+    if (state.mode === "challenge" && state.currentChallenge) {
+      parts.push(state.currentChallenge.titulo);
+    } else {
+      parts.push("Modo Livre");
+    }
+    if ($("sql-input").value.trim()) parts.push("query do editor");
+    if (state.lastExecution.error) parts.push("último erro");
+    label.textContent = `Anexar contexto (${parts.join(" • ")})`;
+  }
+
+  function renderChatMessages() {
+    const container = $("chat-messages");
+    if (!container) return;
+
+    if (!state.chat.messages.length) {
+      container.innerHTML = `
+        <div class="chat-msg model">
+          ${formatChatMarkdown(
+            "Olá! Sou o **Tutor SQL**.\nEscreva ou execute uma consulta e me pergunte **por que ela não funcionou**, como corrigir um `JOIN`, `GROUP BY`, ou diferenças do **SQLite**."
+          )}
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = state.chat.messages
+      .map((msg) => `<div class="chat-msg ${escapeHtml(msg.role)}">${formatChatMarkdown(msg.text)}</div>`)
+      .join("");
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function openChatDrawer(prefillPrompt = null) {
+    state.chat.open = true;
+    $("chat-drawer").classList.remove("hidden");
+    $("chat-fab").classList.add("hidden");
+    updateChatContextLabel();
+    renderChatMessages();
+    const input = $("chat-input");
+    if (prefillPrompt) {
+      input.value = prefillPrompt;
+    }
+    input.focus();
+  }
+
+  function closeChatDrawer() {
+    state.chat.open = false;
+    $("chat-drawer").classList.add("hidden");
+    $("chat-fab").classList.remove("hidden");
+  }
+
+  async function checkChatStatus() {
+    try {
+      const status = await fetchJson("/api/chat/status");
+      state.chat.enabled = Boolean(status.enabled);
+      state.chat.model = status.model || "gemini-3.5-flash-lite";
+      const badge = $("chat-status-badge");
+      if (badge) {
+        badge.textContent = state.chat.enabled ? state.chat.model : "Chave não configurada";
+      }
+    } catch {
+      // Silencioso no boot
+    }
+  }
+
+  async function sendChatMessage(overrideText = null) {
+    if (state.chat.sending) return;
+    const input = $("chat-input");
+    const message = (overrideText !== null ? overrideText : input.value).trim();
+    if (!message) return;
+
+    if (overrideText === null) {
+      input.value = "";
+    }
+
+    const history = state.chat.messages
+      .filter((m) => m.role === "user" || m.role === "model")
+      .slice(-10)
+      .map((m) => ({ role: m.role, text: m.text }));
+
+    state.chat.messages.push({ role: "user", text: message });
+    state.chat.messages.push({ role: "model", text: "Analisando sua query..." });
+    state.chat.sending = true;
+    $("chat-send-btn").disabled = true;
+    renderChatMessages();
+
+    const includeCtx = $("chat-include-context").checked;
+    const payload = {
+      message,
+      history,
+      sql: includeCtx ? $("sql-input").value : null,
+      challenge_id:
+        includeCtx && state.mode === "challenge" && state.currentChallenge
+          ? state.currentChallenge.id
+          : null,
+      last_error: includeCtx ? state.lastExecution.error : null,
+      last_feedback: includeCtx ? state.lastExecution.feedback : null,
+      last_result_summary: includeCtx ? state.lastExecution.resultSummary : null,
+    };
+
+    try {
+      const data = await fetchJson("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      state.chat.messages[state.chat.messages.length - 1] = {
+        role: "model",
+        text: data.reply,
+      };
+      if (data.model) {
+        state.chat.model = data.model;
+      }
+      const badge = $("chat-status-badge");
+      if (badge) {
+        const rem =
+          typeof data.remaining_daily === "number" ? ` • ${data.remaining_daily} restam hoje` : "";
+        badge.textContent = `${state.chat.model}${rem}`;
+      }
+    } catch (err) {
+      state.chat.messages[state.chat.messages.length - 1] = {
+        role: "error",
+        text: `Não foi possível obter resposta do tutor: ${err.message}`,
+      };
+    } finally {
+      state.chat.sending = false;
+      $("chat-send-btn").disabled = false;
+      renderChatMessages();
+      updateChatContextLabel();
+      input.focus();
+    }
+  }
+
+  function initChat() {
+    $("chat-fab").addEventListener("click", () => openChatDrawer());
+    $("chat-close-btn").addEventListener("click", closeChatDrawer);
+    $("chat-clear-btn").addEventListener("click", () => {
+      state.chat.messages = [];
+      renderChatMessages();
+    });
+    $("chat-send-btn").addEventListener("click", () => sendChatMessage());
+    $("chat-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+    document.querySelectorAll(".chat-quick-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        sendChatMessage(btn.dataset.prompt || "");
+      });
+    });
+    $("banner-ask-tutor-btn").addEventListener("click", () => {
+      const prompt = state.lastExecution.error
+        ? "Por que minha query deu esse erro e como posso corrigir?"
+        : "Por que o resultado da minha query ficou diferente do esperado?";
+      openChatDrawer(prompt);
+    });
+    renderChatMessages();
+    checkChatStatus();
+  }
+
   // ==================== BOOT ====================
   document.addEventListener("DOMContentLoaded", () => {
     initTheme();
@@ -2105,6 +2334,7 @@
     initControls();
     initPaneControls();
     initResizers();
+    initChat();
     loadInitialData().catch((err) => {
       showFeedback("error", "!", `Erro ao inicializar aplicação: ${err.message}`);
     });

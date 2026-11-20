@@ -189,6 +189,9 @@
           <div id="feedback-banner" class="feedback-banner hidden">
             <span id="feedback-icon" class="feedback-icon"></span>
             <span id="feedback-text" class="feedback-text"></span>
+            <button id="banner-ask-tutor-btn" type="button" class="btn btn-secondary small banner-next-btn hidden">
+              Tirar dúvida com Tutor
+            </button>
             <button id="banner-next-challenge-btn" type="button" class="btn btn-primary small banner-next-btn hidden">
               Próximo desafio ›
             </button>
@@ -484,6 +487,54 @@ SELECT * FROM ranking WHERE pos &lt;= 3;</pre>
       </div>
     </section>
   </div>
+
+  <!-- Botão Flutuante & Gaveta do Chat Tutor SQL (Gemini) -->
+  <button id="chat-fab" type="button" class="chat-fab" title="Abrir Tutor SQL para tirar dúvidas sobre sua query" aria-label="Abrir chat com Tutor SQL">
+    💬 Tutor SQL
+  </button>
+
+  <aside id="chat-drawer" class="chat-drawer hidden" role="dialog" aria-label="Chat Tutor SQL">
+    <header class="chat-header">
+      <div class="chat-title-group">
+        <strong>Tutor SQL</strong>
+        <span id="chat-status-badge" class="stats-chip">Google Gemini</span>
+      </div>
+      <div class="chat-header-actions">
+        <button id="chat-clear-btn" type="button" class="btn btn-ghost tiny" title="Limpar conversa">Limpar</button>
+        <button id="chat-close-btn" type="button" class="icon-btn small" title="Recolher chat" aria-label="Fechar chat">✕</button>
+      </div>
+    </header>
+
+    <div id="chat-messages" class="chat-messages"></div>
+
+    <div class="chat-quick-prompts">
+      <button type="button" class="btn btn-ghost tiny chat-quick-btn" data-prompt="Por que minha query não funcionou?">
+        Por que falhou?
+      </button>
+      <button type="button" class="btn btn-ghost tiny chat-quick-btn" data-prompt="O que está errado na lógica da minha consulta?">
+        Erro na lógica?
+      </button>
+      <button type="button" class="btn btn-ghost tiny chat-quick-btn" data-prompt="Me dê uma dica para corrigir sem entregar a resposta pronta.">
+        Dica rápida
+      </button>
+    </div>
+
+    <div class="chat-footer">
+      <label class="chat-context-toggle" title="Envia junto sua query atual, o último erro/resultado e o desafio ativo">
+        <input id="chat-include-context" type="checkbox" checked />
+        <span id="chat-context-label">Anexar query e resultado atuais</span>
+      </label>
+      <div class="chat-input-row">
+        <textarea
+          id="chat-input"
+          class="chat-input"
+          rows="2"
+          placeholder="Pergunte sobre sua query ou erro SQL... (Enter envia)"
+        ></textarea>
+        <button id="chat-send-btn" type="button" class="btn btn-primary">Enviar</button>
+      </div>
+    </div>
+  </aside>
 
   <script src="/static/app.js"></script>
 </body>

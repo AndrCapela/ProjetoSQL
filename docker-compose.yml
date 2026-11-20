@@ -12,7 +12,15 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+      CHAT_RATE_LIMIT_PER_MINUTE: ${CHAT_RATE_LIMIT_PER_MINUTE:-6}
+      CHAT_DAILY_LIMIT_PER_USER: ${CHAT_DAILY_LIMIT_PER_USER:-20}
+      CHAT_MAX_HISTORY_MESSAGES: ${CHAT_MAX_HISTORY_MESSAGES:-6}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-*}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_FALLBACK_MODELS: ${GEMINI_FALLBACK_MODELS:-gemini-3.5-flash,gemini-2.5-flash-lite,gemini-2.5-flash}
+      GEMINI_THINKING_LEVEL: ${GEMINI_THINKING_LEVEL:-minimal}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-450}
     read_only: true
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev

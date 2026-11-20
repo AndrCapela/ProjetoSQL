@@ -33,6 +33,7 @@ flowchart LR
 | `app/sql_executor.py` | Validação, sandbox/authorizer SQLite, execução com timeout, sanitização de saída e tradução didática de erros. |
 | `app/comparator.py` | Comparação semântica e geração de status linha a linha (`match`, `extra`, `missing`, `order`). |
 | `app/challenges.py` | Catálogo fixo dos 40 desafios (`facil-1..10`, `medio-1..15`, `dificil-1..15`). |
+| `app/tutor.py` | Integração com a API do Google Gemini (`GEMINI_API_KEY`) para o chat Tutor SQL com contexto do editor e esquema. |
 | `app/static/index.html` | Estrutura HTML da interface, modais (Explorador, DER e Guia SQL) e painéis de resultado. |
 | `app/static/app.js` | Gerenciamento de estado, editor SQL, formatador, tabela paginada/filtrável no cliente e renderização do DER em SVG. |
 | `app/static/styles.css` | Tema escuro/claro por variáveis CSS, layout responsivo e estilos de diff/modais. |
@@ -55,6 +56,7 @@ Define o tipo `DifficultyLevel = Literal["facil", "medio", "dificil"]` e os mode
 - **`TableResult(BaseModel)`**: resultado tabular de uma execução (`columns`, `rows`, `row_count`, `execution_ms`, `truncated`).
 - **`ExpectedAnswer(BaseModel)`**: gabarito retornado no modo desafio contendo `sql` oficial e `result` (`TableResult`).
 - **`ExecuteQueryResponse(BaseModel)`**: resposta completa de `/api/execute` para modo `"challenge"` ou `"free"`, reunindo `user_result`, `user_error`, `user_error_hint`, `expected`, `is_correct`, `feedback`, `user_row_status` e `expected_row_status`.
+- **`ChatMessage(BaseModel)` / `ChatPayload(BaseModel)` / `ChatResponse(BaseModel)`**: contratos do chat Tutor SQL, transportando a pergunta, histórico recente, query atual, desafio ativo, último erro/feedback e resposta do modelo.
 
 ### 3.2. `app/challenges.py` — Catálogo de Desafios
 - **`Challenge` (`@dataclass(frozen=True)`)**: representa um desafio imutável com `id`, `nivel`, `titulo`, `enunciado`, `dica`, `solucao_sql`, `ordem_importa` e `topicos`.
@@ -94,6 +96,14 @@ Define o tipo `DifficultyLevel = Literal["facil", "medio", "dificil"]` e os mode
   - `GET /api/challenges`: lista desafios com filtro opcional por `nivel`.
   - `POST /api/execute`: executa consulta em Modo Livre ou avalia contra o gabarito do desafio.
   - `POST /api/explain`: executa `EXPLAIN QUERY PLAN`.
+  - `GET /api/chat/status`: informa se o agente Gemini (`GEMINI_API_KEY`) está configurado e qual `GEMINI_MODEL` está ativo.
+  - `POST /api/chat`: envia a dúvida do usuário com contexto SQL para `app/tutor.py` (`ask_gemini_tutor`), protegido por `CHAT_RATE_LIMIT_PER_MINUTE`.
+
+### 3.8. `app/tutor.py` — Agente Tutor SQL (Google Gemini)
+- **`TutorConfigError` / `TutorUpstreamError`**: exceções tipadas para chave ausente (`503`) ou falha na API externa (`502`).
+- **`build_schema_context(schema)` / `build_tutor_system_prompt(schema_text)`**: formata as 6 tabelas e suas chaves para instruir o Gemini como tutor especialista em SQLite.
+- **`build_user_turn_with_context(payload, challenge)`**: anexa à pergunta do aluno o enunciado/dica do desafio atual (e referência interna para diagnóstico), a query do editor, o último erro e o resumo do último resultado.
+- **`ask_gemini_tutor(payload, schema, challenge)`**: chama a Gemini REST API via `httpx.post` com a chave no header `x-goog-api-key`, usando `GEMINI_MODEL` (padrão `gemini-3.5-flash-lite`) e realizando fallback automático em `GEMINI_FALLBACK_MODELS` (`gemini-3.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.5-flash`). Também aplica economia de tokens configurável via `GEMINI_THINKING_LEVEL=minimal` (mapeado automaticamente para `thinkingLevel` no Gemini 3.x e `thinkingBudget=0` no Gemini 2.5), `GEMINI_MAX_OUTPUT_TOKENS=450`, `CHAT_MAX_HISTORY_MESSAGES=6`, além dos limites por IP `CHAT_RATE_LIMIT_PER_MINUTE=6` e `CHAT_DAILY_LIMIT_PER_USER=20`.
 
 ### 3.7. Frontend (`app/static/app.js`, `index.html`, `styles.css`)
 - **Estado central (`state` e `createTableState`)**: mantém modo atual (`challenge`/`free`), nível, filtro de tópico, lista de desafios, IDs resolvidos, histórico de queries, rascunhos por desafio e estado de paginação/ordenação/filtro local das tabelas de resultado.

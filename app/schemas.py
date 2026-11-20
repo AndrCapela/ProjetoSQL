@@ -76,3 +76,30 @@ class ExecuteQueryResponse(BaseModel):
     feedback: str | None = None
     user_row_status: list[Literal["match", "extra", "order"]] | None = None
     expected_row_status: list[Literal["match", "missing", "order"]] | None = None
+
+
+class ChatMessage(BaseModel):
+    """Mensagem do histórico de conversa com o agente tutor."""
+
+    role: Literal["user", "model"]
+    text: str = Field(..., min_length=1, max_length=4_000)
+
+
+class ChatPayload(BaseModel):
+    """Payload de dúvida enviada pelo usuário ao agente tutor SQL."""
+
+    message: str = Field(..., min_length=1, max_length=2_000)
+    history: list[ChatMessage] = Field(default_factory=list, max_length=12)
+    sql: str | None = Field(default=None, max_length=10_000)
+    challenge_id: str | None = None
+    last_error: str | None = Field(default=None, max_length=2_000)
+    last_feedback: str | None = Field(default=None, max_length=1_000)
+    last_result_summary: str | None = Field(default=None, max_length=2_000)
+
+
+class ChatResponse(BaseModel):
+    """Resposta do agente tutor SQL."""
+
+    reply: str
+    model: str
+    remaining_daily: int | None = None

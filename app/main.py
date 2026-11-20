@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import time
 from collections import defaultdict, deque
 from contextlib import asynccontextmanager
@@ -21,6 +22,8 @@ from app.comparator import compare_results
 from app.database import DEFAULT_DB_PATH, ensure_database, get_schema_metadata
 from app.schemas import (
     ChallengeSummary,
+    ChatPayload,
+    ChatResponse,
     DifficultyLevel,
     ExecuteQueryResponse,
     ExpectedAnswer,
@@ -34,6 +37,13 @@ from app.sql_executor import (
     execute_readonly_sql,
     explain_readonly_sql,
     translate_sqlite_error,
+)
+from app.tutor import (
+    TutorConfigError,
+    TutorUpstreamError,
+    ask_gemini_tutor,
+    get_tutor_config,
+    get_tutor_limits,
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -59,9 +69,15 @@ SECURITY_HEADERS = {
 class SlidingWindowRateLimiter:
     """Limitador de requisições em janela deslizante por IP (em memória, com limpeza)."""
 
-    def __init__(self, max_requests: int, window_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        max_requests: int,
+        window_seconds: int = 60,
+        detail_message: str | None = None,
+    ) -> None:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.detail_message = detail_message
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._lock = Lock()
         self._checks = 0
@@ -73,6 +89,18 @@ class SlidingWindowRateLimiter:
         ]
         for ip in stale_keys:
             del self._hits[ip]
+
+    def remaining(self, key: str) -> int | None:
+        if self.max_requests <= 0:
+            return None
+        cutoff = time.monotonic() - self.window_seconds
+        with self._lock:
+            bucket = self._hits.get(key)
+            if not bucket:
+                return self.max_requests
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+            return max(0, self.max_requests - len(bucket))
 
     def check(self, key: str) -> None:
         if self.max_requests <= 0:
@@ -90,7 +118,8 @@ class SlidingWindowRateLimiter:
             if len(bucket) >= self.max_requests:
                 raise HTTPException(
                     status_code=429,
-                    detail=(
+                    detail=self.detail_message
+                    or (
                         f"Limite de {self.max_requests} requisições por minuto atingido. "
                         "Aguarde alguns segundos e tente novamente."
                     ),
@@ -136,6 +165,8 @@ def _to_challenge_summary(ch: Challenge) -> ChallengeSummary:
 def create_app(
     db_path: Path = DEFAULT_DB_PATH,
     rate_limit_per_minute: int | None = None,
+    chat_rate_limit_per_minute: int | None = None,
+    chat_daily_limit_per_user: int | None = None,
 ) -> FastAPI:
     """Factory da aplicação FastAPI com caminho de banco e rate limit configuráveis."""
     app_env = os.getenv("APP_ENV", "development").strip().lower()
@@ -146,9 +177,28 @@ def create_app(
         if rate_limit_per_minute is not None
         else int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
     )
+    chat_limit = (
+        chat_rate_limit_per_minute
+        if chat_rate_limit_per_minute is not None
+        else int(os.getenv("CHAT_RATE_LIMIT_PER_MINUTE", "6"))
+    )
+    daily_chat_limit = (
+        chat_daily_limit_per_user
+        if chat_daily_limit_per_user is not None
+        else int(os.getenv("CHAT_DAILY_LIMIT_PER_USER", "20"))
+    )
     limiter = SlidingWindowRateLimiter(max_requests=limit, window_seconds=60)
     browse_limit = max(limit * 3, 180) if limit > 0 else 0
     browse_limiter = SlidingWindowRateLimiter(max_requests=browse_limit, window_seconds=60)
+    chat_limiter = SlidingWindowRateLimiter(max_requests=chat_limit, window_seconds=60)
+    chat_daily_limiter = SlidingWindowRateLimiter(
+        max_requests=daily_chat_limit,
+        window_seconds=86_400,
+        detail_message=(
+            f"Limite diário de {daily_chat_limit} mensagens ao Tutor SQL atingido. "
+            "Tente novamente amanhã."
+        ),
+    )
     schema_lock = Lock()
 
     def enforce_rate_limit(request: Request) -> None:
@@ -156,6 +206,11 @@ def create_app(
 
     def enforce_browse_rate_limit(request: Request) -> None:
         browse_limiter.check(_extract_client_ip(request))
+
+    def enforce_chat_rate_limit(request: Request) -> None:
+        ip = _extract_client_ip(request)
+        chat_limiter.check(ip)
+        chat_daily_limiter.check(ip)
 
     def get_cached_schema() -> list[dict[str, Any]]:
         cached = application.state.schema_cache
@@ -352,7 +407,68 @@ def create_app(
         except (SQLValidationError, sqlite3.Error, TimeoutError) as exc:
             return {"result": None, "error": str(exc)}
 
+    @application.get("/api/chat/status")
+    def chat_status() -> dict[str, Any]:
+        """Informa se o agente tutor (Gemini) está configurado no servidor e seus limites."""
+        api_key, model, fallback_models = get_tutor_config()
+        max_output_tokens, thinking_level, max_history = get_tutor_limits()
+        return {
+            "enabled": bool(api_key),
+            "model": model,
+            "fallback_models": fallback_models,
+            "daily_limit": daily_chat_limit,
+            "rate_limit_per_minute": chat_limit,
+            "max_output_tokens": max_output_tokens,
+            "thinking_level": thinking_level,
+            "max_history_messages": max_history,
+        }
+
+    @application.post(
+        "/api/chat",
+        response_model=ChatResponse,
+        dependencies=[Depends(enforce_chat_rate_limit)],
+    )
+    def chat_with_tutor(payload: ChatPayload, request: Request) -> ChatResponse:
+        """Encaminha dúvida de SQL + contexto atual do usuário para o agente Google Gemini."""
+        challenge = None
+        if payload.challenge_id:
+            challenge = get_challenge(payload.challenge_id)
+            if challenge is None:
+                raise HTTPException(status_code=404, detail="Desafio não encontrado.")
+
+        try:
+            reply, model = ask_gemini_tutor(
+                payload=payload,
+                schema=get_cached_schema(),
+                challenge=challenge,
+            )
+            remaining_daily = chat_daily_limiter.remaining(_extract_client_ip(request))
+            return ChatResponse(reply=reply, model=model, remaining_daily=remaining_daily)
+        except TutorConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except TutorUpstreamError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     return application
 
 
+def _load_local_dotenv() -> None:
+    """Carrega variáveis do arquivo .env local quando não definidas no ambiente."""
+    if "pytest" in sys.modules:
+        return
+    env_file = Path(__file__).resolve().parent.parent / ".env"
+    if not env_file.is_file():
+        return
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_local_dotenv()
 app = create_app()
