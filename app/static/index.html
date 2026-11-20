@@ -54,19 +54,26 @@
             </button>
             <div id="progress-popover" class="progress-popover hidden"></div>
           </div>
-          <button id="reset-progress-btn" class="btn btn-ghost tiny" title="Limpar progresso de exercícios resolvidos">
-            Zerar
-          </button>
         </div>
-        <button id="open-der-btn" class="btn btn-secondary" title="Abrir mapeamento de objetos e relacionamentos (DER)">
-          Mapeamento (DER)
-        </button>
-        <button id="open-browser-btn" class="btn btn-secondary" title="Navegar pelos dados das tabelas">
-          Explorar Tabelas
-        </button>
-        <button id="open-guide-btn" class="btn btn-ghost" title="Cola rápida de SQLite e comparativo com PostgreSQL/MySQL">
-          Guia SQL
-        </button>
+        <div class="mobile-menu-wrap">
+          <button id="mobile-menu-btn" type="button" class="icon-btn mobile-only-btn" title="Ferramentas e opções" aria-label="Abrir menu de ferramentas">
+            ⋯
+          </button>
+          <div id="topbar-tools-group" class="topbar-tools-group">
+            <button id="reset-progress-btn" class="btn btn-ghost tiny" title="Limpar progresso de exercícios resolvidos">
+              Zerar
+            </button>
+            <button id="open-der-btn" class="btn btn-secondary" title="Abrir mapeamento de objetos e relacionamentos (DER)">
+              Mapeamento (DER)
+            </button>
+            <button id="open-browser-btn" class="btn btn-secondary" title="Navegar pelos dados das tabelas">
+              Explorar Tabelas
+            </button>
+            <button id="open-guide-btn" class="btn btn-ghost" title="Cola rápida de SQLite e comparativo com PostgreSQL/MySQL">
+              Guia SQL
+            </button>
+          </div>
+        </div>
         <button id="theme-toggle-btn" class="icon-btn" title="Alternar tema claro/escuro" aria-label="Alternar tema">
           ☀
         </button>
@@ -76,15 +83,21 @@
     <!-- Área Principal Dividida -->
     <div id="workspace-layout" class="workspace-layout">
       <!-- Barra Lateral: Schema do Banco -->
+      <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
       <aside id="schema-sidebar" class="schema-sidebar">
         <div class="panel-header">
           <div>
             <h2>Esquema do Banco</h2>
             <span class="muted-small">Clique na coluna para inserir no SQL</span>
           </div>
-          <button id="collapse-all-tables-btn" class="icon-btn small" title="Recolher/expandir todas">
-            ⇅
-          </button>
+          <div class="sidebar-header-actions">
+            <button id="collapse-all-tables-btn" class="icon-btn small" title="Recolher/expandir todas">
+              ⇅
+            </button>
+            <button id="close-sidebar-mobile-btn" type="button" class="icon-btn small mobile-only-btn" title="Fechar esquema" aria-label="Fechar esquema">
+              ✕
+            </button>
+          </div>
         </div>
         <div id="schema-list" class="schema-list">
           <p class="loading-text">Carregando tabelas...</p>
@@ -177,6 +190,18 @@
                 <div id="sql-autocomplete" class="sql-autocomplete hidden" role="listbox" aria-label="Sugestões SQL"></div>
               </div>
             </div>
+            <div id="mobile-sql-bar" class="mobile-sql-bar" aria-label="Atalhos de símbolos SQL">
+              <button type="button" class="mobile-sql-chip" data-insert="SELECT ">SELECT</button>
+              <button type="button" class="mobile-sql-chip" data-insert="FROM ">FROM</button>
+              <button type="button" class="mobile-sql-chip" data-insert="WHERE ">WHERE</button>
+              <button type="button" class="mobile-sql-chip" data-insert="*">*</button>
+              <button type="button" class="mobile-sql-chip" data-insert=", ">,</button>
+              <button type="button" class="mobile-sql-chip" data-insert="''" data-offset="1">' '</button>
+              <button type="button" class="mobile-sql-chip" data-insert=" = ">=</button>
+              <button type="button" class="mobile-sql-chip" data-insert="()" data-offset="1">( )</button>
+              <button type="button" class="mobile-sql-chip" data-insert="_">_</button>
+              <button type="button" class="mobile-sql-chip" data-insert=";">;</button>
+            </div>
           </div>
         </section>
 
@@ -209,8 +234,17 @@
             </p>
           </div>
 
+          <div id="mobile-results-tabs" class="mobile-results-tabs hidden" role="tablist" aria-label="Alternar entre seu resultado e gabarito">
+            <button type="button" id="mobile-tab-user" class="mobile-tab-btn active" data-mobile-tab-target="user" role="tab" aria-selected="true">
+              Seu Resultado <span id="mobile-tab-user-badge" class="mobile-tab-badge hidden"></span>
+            </button>
+            <button type="button" id="mobile-tab-expected" class="mobile-tab-btn" data-mobile-tab-target="expected" role="tab" aria-selected="false">
+              Gabarito <span id="mobile-tab-expected-badge" class="mobile-tab-badge hidden"></span>
+            </button>
+          </div>
+
           <!-- Container Duplo de Tabelas -->
-          <div id="dual-results-grid" class="dual-results-grid hidden">
+          <div id="dual-results-grid" class="dual-results-grid hidden" data-mobile-tab="user">
             <!-- Painel 1: Resultado do Usuário -->
             <article id="user-result-pane" class="result-pane" data-pane="user">
               <header class="pane-header">

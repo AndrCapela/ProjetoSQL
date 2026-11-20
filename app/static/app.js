@@ -228,6 +228,7 @@
     container.querySelectorAll(".browse-table-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
+        closeMobileSidebar();
         openDataBrowser(btn.dataset.table);
       });
     });
@@ -235,6 +236,9 @@
     container.querySelectorAll(".schema-col-item").forEach((item) => {
       item.addEventListener("click", () => {
         insertAtCursor(item.dataset.insert);
+        if (isMobileViewport()) {
+          closeMobileSidebar();
+        }
       });
     });
   }
@@ -323,6 +327,35 @@
     return null;
   }
 
+  function isMobileViewport() {
+    return window.matchMedia("(max-width: 960px)").matches;
+  }
+
+  function openMobileSidebar() {
+    $("schema-sidebar").classList.add("mobile-open");
+    $("sidebar-backdrop").classList.remove("hidden");
+  }
+
+  function closeMobileSidebar() {
+    $("schema-sidebar").classList.remove("mobile-open");
+    $("sidebar-backdrop").classList.add("hidden");
+  }
+
+  function closeMobileMenu() {
+    $("topbar-tools-group").classList.remove("mobile-open");
+  }
+
+  function setMobileResultsTab(tab) {
+    const grid = $("dual-results-grid");
+    if (!grid) return;
+    grid.setAttribute("data-mobile-tab", tab);
+    const isUser = tab === "user";
+    $("mobile-tab-user").classList.toggle("active", isUser);
+    $("mobile-tab-user").setAttribute("aria-selected", String(isUser));
+    $("mobile-tab-expected").classList.toggle("active", !isUser);
+    $("mobile-tab-expected").setAttribute("aria-selected", String(!isUser));
+  }
+
   function setExpectedSqlVisible(visible) {
     state.expectedSqlRevealed = Boolean(visible);
     $("expected-sql-code").classList.toggle("hidden", !state.expectedSqlRevealed);
@@ -338,6 +371,10 @@
     $("feedback-banner").classList.add("hidden");
     $("banner-next-challenge-btn").classList.add("hidden");
     $("export-csv-btn").classList.add("hidden");
+    $("mobile-results-tabs").classList.add("hidden");
+    $("mobile-tab-user-badge").classList.add("hidden");
+    $("mobile-tab-expected-badge").classList.add("hidden");
+    setMobileResultsTab("user");
     $("dual-results-grid").classList.add("hidden");
     $("empty-results-state").classList.remove("hidden");
     $("user-error-box").classList.add("hidden");
@@ -458,6 +495,10 @@
       $("feedback-banner").classList.add("hidden");
     $("banner-next-challenge-btn").classList.add("hidden");
     $("export-csv-btn").classList.add("hidden");
+    $("mobile-results-tabs").classList.add("hidden");
+    $("mobile-tab-user-badge").classList.add("hidden");
+    $("mobile-tab-expected-badge").classList.add("hidden");
+    setMobileResultsTab("user");
       $("expected-result-pane").classList.add("hidden");
       $("results-resizer").classList.add("hidden");
       $("user-result-pane").classList.add("single-full");
@@ -942,14 +983,14 @@
     updateSqlHighlight();
   }
 
-  function insertAtCursor(text) {
+  function insertAtCursor(text, cursorOffset = null) {
     const textarea = $("sql-input");
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const before = textarea.value.slice(0, start);
     const after = textarea.value.slice(end);
     textarea.value = before + text + after;
-    const nextPos = start + text.length;
+    const nextPos = start + (cursorOffset !== null ? cursorOffset : text.length);
     textarea.setSelectionRange(nextPos, nextPos);
     textarea.focus();
     updateLineNumbers();
@@ -1064,6 +1105,8 @@
       });
 
       $("empty-results-state").classList.add("hidden");
+      $("mobile-results-tabs").classList.add("hidden");
+      setMobileResultsTab("user");
       $("dual-results-grid").classList.remove("hidden");
       $("expected-result-pane").classList.add("hidden");
       $("results-resizer").classList.add("hidden");
@@ -1188,6 +1231,26 @@
       $("expected-result-pane").classList.remove("hidden");
       $("results-resizer").classList.remove("hidden");
       $("user-result-pane").classList.remove("single-full");
+      $("mobile-results-tabs").classList.remove("hidden");
+      setMobileResultsTab("user");
+
+      const userBadge = $("mobile-tab-user-badge");
+      const expectedBadge = $("mobile-tab-expected-badge");
+      if (data.is_correct) {
+        userBadge.textContent = "✓";
+        userBadge.className = "mobile-tab-badge ok";
+        expectedBadge.classList.add("hidden");
+      } else if (data.user_error) {
+        userBadge.textContent = "Erro";
+        userBadge.className = "mobile-tab-badge err";
+        expectedBadge.textContent = `${data.expected.result.row_count}`;
+        expectedBadge.className = "mobile-tab-badge";
+      } else {
+        userBadge.textContent = "!";
+        userBadge.className = "mobile-tab-badge warn";
+        expectedBadge.textContent = `${data.expected.result.row_count}`;
+        expectedBadge.className = "mobile-tab-badge";
+      }
 
       state.lastExpectedSql = data.expected.sql;
       $("expected-sql-code").textContent = data.expected.sql;
@@ -1220,6 +1283,8 @@
         $("banner-ask-tutor-btn").classList.remove("hidden");
       }
     } else {
+      $("mobile-results-tabs").classList.add("hidden");
+      setMobileResultsTab("user");
       $("expected-result-pane").classList.add("hidden");
       $("results-resizer").classList.add("hidden");
       $("user-result-pane").classList.add("single-full");
@@ -1872,6 +1937,10 @@
       if (!$("der-backdrop").classList.contains("hidden")) {
         drawDerConnectors();
       }
+      if (!isMobileViewport()) {
+        closeMobileSidebar();
+        closeMobileMenu();
+      }
     });
 
     if (typeof ResizeObserver !== "undefined") {
@@ -1896,6 +1965,8 @@
         $("history-popover").classList.add("hidden");
         $("progress-popover").classList.add("hidden");
         hideAutocomplete();
+        closeMobileSidebar();
+        closeMobileMenu();
         if (state.chat.open) closeChatDrawer();
       }
     });
@@ -1961,8 +2032,38 @@
   // ==================== EVENT WIRING ====================
   function initControls() {
     $("toggle-sidebar-btn").addEventListener("click", () => {
-      $("schema-sidebar").classList.toggle("collapsed");
+      if (isMobileViewport()) {
+        const isOpen = $("schema-sidebar").classList.toggle("mobile-open");
+        $("sidebar-backdrop").classList.toggle("hidden", !isOpen);
+      } else {
+        $("schema-sidebar").classList.toggle("collapsed");
+      }
     });
+
+    $("close-sidebar-mobile-btn").addEventListener("click", closeMobileSidebar);
+    $("sidebar-backdrop").addEventListener("click", closeMobileSidebar);
+
+    $("mobile-menu-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      $("topbar-tools-group").classList.toggle("mobile-open");
+    });
+
+    $("topbar-tools-group").querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", closeMobileMenu);
+    });
+
+    document.querySelectorAll(".mobile-sql-chip").forEach((chip) => {
+      chip.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+      });
+      chip.addEventListener("click", () => {
+        const offset = chip.dataset.offset ? Number(chip.dataset.offset) : null;
+        insertAtCursor(chip.dataset.insert || "", offset);
+      });
+    });
+
+    $("mobile-tab-user").addEventListener("click", () => setMobileResultsTab("user"));
+    $("mobile-tab-expected").addEventListener("click", () => setMobileResultsTab("expected"));
 
     $("collapse-all-tables-btn").addEventListener("click", () => {
       const lists = document.querySelectorAll(".schema-columns");
@@ -2089,6 +2190,9 @@
       }
       if (!e.target.closest(".editor-stage")) {
         hideAutocomplete();
+      }
+      if (!e.target.closest(".mobile-menu-wrap")) {
+        closeMobileMenu();
       }
     });
 
