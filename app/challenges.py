@@ -128,7 +128,7 @@ CHALLENGES: tuple[Challenge, ...] = (
         titulo="Alunos entre 25 e 30 anos",
         enunciado=(
             "Retorne o nome, a idade e a cidade dos alunos com idade entre 25 e 30 anos (inclusive), "
-            "ordenados da menor idade para a maior e pelo nome em caso de empate."
+            "ordenados da menor idade para a maior e, em caso de empate, pelo nome em ordem alfabética (crescente)."
         ),
         dica="Use WHERE idade BETWEEN 25 AND 30 combinado com ORDER BY idade ASC, nome ASC.",
         solucao_sql=(
