@@ -117,6 +117,9 @@ def test_chat_endpoint_calls_gemini_with_context_and_rate_limit(
         sent_user_text = captured["json"]["contents"][-1]["parts"][0]["text"]
         assert "SELECT YEAR(data_matricula) FROM alunos;" in sent_user_text
         assert "no such function: YEAR" in sent_user_text
+        system_text = captured["json"]["system_instruction"]["parts"][0]["text"]
+        assert "EXCLUSIVAMENTE" in system_text
+        assert "recuse educadamente" in system_text
 
         r2 = client.post("/api/chat", json={"message": "Entendi, obrigado!"})
         assert r2.status_code == 200
