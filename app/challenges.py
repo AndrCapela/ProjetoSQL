@@ -605,20 +605,25 @@ CHALLENGES: tuple[Challenge, ...] = (
             "GROUP BY c.categoria\n"
             "ORDER BY total_disciplinas DESC, c.categoria ASC;"
         ),
-        dica_duckdb="Use LEFT JOIN entre cursos e disciplinas, COUNT(DISTINCT c.id), COUNT(d.id) e GROUP BY ALL.",
+        dica_duckdb="Pré-agregue disciplinas por curso_id em uma CTE antes do LEFT JOIN com cursos para evitar COUNT(DISTINCT) e use GROUP BY ALL.",
         solucao_duckdb=(
+            "WITH disc_por_curso AS (\n"
+            "    SELECT curso_id, COUNT(*) AS qtd_disciplinas\n"
+            "    FROM disciplinas\n"
+            "    GROUP BY curso_id\n"
+            ")\n"
             "SELECT\n"
             "    c.categoria,\n"
-            "    COUNT(DISTINCT c.id) AS total_cursos,\n"
-            "    COUNT(d.id) AS total_disciplinas\n"
+            "    COUNT(*) AS total_cursos,\n"
+            "    COALESCE(SUM(d.qtd_disciplinas), 0) AS total_disciplinas\n"
             "FROM cursos c\n"
-            "LEFT JOIN disciplinas d ON d.curso_id = c.id\n"
+            "LEFT JOIN disc_por_curso d ON d.curso_id = c.id\n"
             "GROUP BY ALL\n"
             "ORDER BY total_disciplinas DESC, c.categoria ASC;"
         ),
         ordem_importa=True,
         topicos=("LEFT JOIN", "COUNT(DISTINCT)", "GROUP BY", "ORDER BY"),
-        topicos_duckdb=("LEFT JOIN", "COUNT(DISTINCT)", "GROUP BY ALL"),
+        topicos_duckdb=("Pré-agregação", "LEFT JOIN", "GROUP BY ALL"),
     ),
     Challenge(
         id="medio-12",
@@ -721,23 +726,27 @@ CHALLENGES: tuple[Challenge, ...] = (
             "HAVING COUNT(n.id) >= 4\n"
             "ORDER BY media_concluidas DESC, a.nome ASC;"
         ),
-        dica_duckdb="Filtre WHERE ad.status = 'concluida', agrupe com GROUP BY ALL e use HAVING total_avaliacoes >= 4.",
+        dica_duckdb="Filtre WHERE ad.status = 'concluida', agrupe por ad.aluno_id com HAVING total_avaliacoes >= 4 e só depois faça JOIN com alunos.",
         solucao_duckdb=(
-            "SELECT\n"
-            "    a.nome,\n"
-            "    COUNT(n.id) AS total_avaliacoes,\n"
-            "    ROUND(AVG(n.nota), 2) AS media_concluidas\n"
-            "FROM alunos a\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "WHERE ad.status = 'concluida'\n"
-            "GROUP BY ALL\n"
-            "HAVING total_avaliacoes >= 4\n"
-            "ORDER BY media_concluidas DESC, a.nome ASC;"
+            "WITH concluidas AS (\n"
+            "    SELECT\n"
+            "        ad.aluno_id,\n"
+            "        COUNT(n.id) AS total_avaliacoes,\n"
+            "        ROUND(AVG(n.nota), 2) AS media_concluidas\n"
+            "    FROM alunos_disciplinas ad\n"
+            "    INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
+            "    WHERE ad.status = 'concluida'\n"
+            "    GROUP BY ad.aluno_id\n"
+            "    HAVING total_avaliacoes >= 4\n"
+            ")\n"
+            "SELECT a.nome, c.total_avaliacoes, c.media_concluidas\n"
+            "FROM concluidas c\n"
+            "INNER JOIN alunos a ON a.id = c.aluno_id\n"
+            "ORDER BY c.media_concluidas DESC, a.nome ASC;"
         ),
         ordem_importa=True,
         topicos=("JOIN", "WHERE", "GROUP BY", "HAVING"),
-        topicos_duckdb=("GROUP BY ALL", "HAVING (Alias)", "JOIN"),
+        topicos_duckdb=("Pré-agregação", "HAVING (Alias)", "CTE (WITH)"),
     ),
     # ==================== DIFÍCIL ====================
     Challenge(
@@ -784,19 +793,30 @@ CHALLENGES: tuple[Challenge, ...] = (
             "HAVING AVG(n.nota) > (SELECT AVG(nota) FROM notas)\n"
             "ORDER BY media_aluno DESC, a.nome ASC;"
         ),
-        dica_duckdb="Agrupe com GROUP BY ALL e compare no HAVING com a subquery (SELECT AVG(nota) FROM notas).",
+        dica_duckdb=(
+            "Em uma única leitura de notas, agrupe por ad.aluno_id e compare no QUALIFY contra a média global "
+            "ponderada SUM(SUM(n.nota)) OVER () / SUM(COUNT(n.nota)) OVER (), juntando alunos só no final."
+        ),
         solucao_duckdb=(
-            "SELECT a.nome, ROUND(AVG(n.nota), 2) AS media_aluno\n"
-            "FROM alunos a\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "GROUP BY ALL\n"
-            "HAVING AVG(n.nota) > (SELECT AVG(nota) FROM notas)\n"
-            "ORDER BY media_aluno DESC, a.nome ASC;"
+            "WITH alunos_acima AS (\n"
+            "    SELECT\n"
+            "        ad.aluno_id,\n"
+            "        ROUND(SUM(n.nota) / COUNT(n.nota), 2) AS media_aluno\n"
+            "    FROM notas n\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "    GROUP BY ad.aluno_id\n"
+            "    QUALIFY (SUM(n.nota) / COUNT(n.nota)) > (\n"
+            "        SUM(SUM(n.nota)) OVER () / SUM(COUNT(n.nota)) OVER ()\n"
+            "    )\n"
+            ")\n"
+            "SELECT a.nome, aa.media_aluno\n"
+            "FROM alunos_acima aa\n"
+            "INNER JOIN alunos a ON a.id = aa.aluno_id\n"
+            "ORDER BY aa.media_aluno DESC, a.nome ASC;"
         ),
         ordem_importa=True,
         topicos=("Subquery", "GROUP BY", "HAVING", "AVG"),
-        topicos_duckdb=("GROUP BY ALL", "Subquery", "HAVING"),
+        topicos_duckdb=("Single-pass", "QUALIFY", "Pré-agregação", "Window Function"),
     ),
     Challenge(
         id="dificil-3",
@@ -865,29 +885,35 @@ CHALLENGES: tuple[Challenge, ...] = (
             "ORDER BY aluno ASC, disciplina ASC;"
         ),
         dica_duckdb=(
-            "No DuckDB você pode reutilizar o alias 'media' calculado no mesmo SELECT dentro do CASE WHEN, "
-            "sem precisar de CTE."
+            "Pré-agregue a tabela notas por aluno_disciplina_id (1 Perfect Hash Group By) antes de fazer JOIN "
+            "com alunos e disciplinas para aplicar o CASE WHEN."
         ),
         solucao_duckdb=(
+            "WITH medias AS (\n"
+            "    SELECT\n"
+            "        aluno_disciplina_id,\n"
+            "        ROUND(AVG(nota), 2) AS media\n"
+            "    FROM notas\n"
+            "    GROUP BY aluno_disciplina_id\n"
+            ")\n"
             "SELECT\n"
             "    a.nome AS aluno,\n"
             "    d.nome AS disciplina,\n"
-            "    ROUND(AVG(n.nota), 2) AS media,\n"
+            "    m.media,\n"
             "    CASE\n"
-            "        WHEN media >= 9.0 THEN 'Excelente'\n"
-            "        WHEN media >= 7.5 THEN 'Bom'\n"
+            "        WHEN m.media >= 9.0 THEN 'Excelente'\n"
+            "        WHEN m.media >= 7.5 THEN 'Bom'\n"
             "        ELSE 'Regular'\n"
             "    END AS conceito\n"
-            "FROM alunos_disciplinas ad\n"
+            "FROM medias m\n"
+            "INNER JOIN alunos_disciplinas ad ON ad.id = m.aluno_disciplina_id\n"
             "INNER JOIN alunos a ON a.id = ad.aluno_id\n"
             "INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "GROUP BY ad.id, a.nome, d.nome\n"
             "ORDER BY aluno ASC, disciplina ASC;"
         ),
         ordem_importa=True,
         topicos=("CTE (WITH)", "CASE WHEN", "GROUP BY"),
-        topicos_duckdb=("Alias Lateral", "CASE WHEN", "GROUP BY"),
+        topicos_duckdb=("Pré-agregação", "CTE (WITH)", "CASE WHEN"),
     ),
     Challenge(
         id="dificil-5",
@@ -917,21 +943,25 @@ CHALLENGES: tuple[Challenge, ...] = (
             "ORDER BY disciplina ASC, aluno ASC;"
         ),
         dica_duckdb=(
-            "Use a cláusula QUALIFY do DuckDB para filtrar RANK() OVER (PARTITION BY d.id ORDER BY n.nota DESC) = 1 "
-            "sem precisar de CTE."
+            "Use QUALIFY RANK() OVER (PARTITION BY ad.disciplina_id ORDER BY n.nota DESC) = 1 "
+            "antes de fazer JOIN com disciplinas e alunos."
         ),
         solucao_duckdb=(
-            "SELECT d.nome AS disciplina, a.nome AS aluno, n.nota\n"
-            "FROM notas n\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
-            "INNER JOIN alunos a ON a.id = ad.aluno_id\n"
-            "INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
-            "QUALIFY RANK() OVER (PARTITION BY d.id ORDER BY n.nota DESC) = 1\n"
+            "WITH maiores AS (\n"
+            "    SELECT ad.disciplina_id, ad.aluno_id, n.nota\n"
+            "    FROM notas n\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "    QUALIFY RANK() OVER (PARTITION BY ad.disciplina_id ORDER BY n.nota DESC) = 1\n"
+            ")\n"
+            "SELECT d.nome AS disciplina, a.nome AS aluno, m.nota\n"
+            "FROM maiores m\n"
+            "INNER JOIN disciplinas d ON d.id = m.disciplina_id\n"
+            "INNER JOIN alunos a ON a.id = m.aluno_id\n"
             "ORDER BY disciplina ASC, aluno ASC;"
         ),
         ordem_importa=True,
         topicos=("Window Function", "RANK()", "CTE (WITH)"),
-        topicos_duckdb=("QUALIFY", "RANK()", "Window Function"),
+        topicos_duckdb=("QUALIFY", "RANK()", "Filter-before-Join"),
     ),
     Challenge(
         id="dificil-6",
@@ -954,22 +984,28 @@ CHALLENGES: tuple[Challenge, ...] = (
             "ORDER BY alunos_distintos DESC, p.nome ASC;"
         ),
         dica_duckdb=(
-            "Conecte professores -> disciplinas -> alunos_disciplinas com LEFT JOIN, "
-            "conte COUNT(DISTINCT ad.aluno_id) e use GROUP BY ALL."
+            "Calcule COUNT(DISTINCT ad.aluno_id) agrupando por d.professor_id (inteiros) em uma CTE "
+            "e use LEFT JOIN com professores + COALESCE(..., 0)."
         ),
         solucao_duckdb=(
+            "WITH alcance AS (\n"
+            "    SELECT\n"
+            "        d.professor_id,\n"
+            "        COUNT(DISTINCT ad.aluno_id) AS alunos_distintos\n"
+            "    FROM disciplinas d\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
+            "    GROUP BY d.professor_id\n"
+            ")\n"
             "SELECT\n"
             "    p.nome AS professor,\n"
-            "    COUNT(DISTINCT ad.aluno_id) AS alunos_distintos\n"
+            "    COALESCE(a.alunos_distintos, 0) AS alunos_distintos\n"
             "FROM professores p\n"
-            "LEFT JOIN disciplinas d ON d.professor_id = p.id\n"
-            "LEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
-            "GROUP BY ALL\n"
+            "LEFT JOIN alcance a ON a.professor_id = p.id\n"
             "ORDER BY alunos_distintos DESC, professor ASC;"
         ),
         ordem_importa=True,
         topicos=("LEFT JOIN", "COUNT(DISTINCT)", "GROUP BY"),
-        topicos_duckdb=("LEFT JOIN", "COUNT(DISTINCT)", "GROUP BY ALL"),
+        topicos_duckdb=("Pré-agregação", "COUNT(DISTINCT)", "LEFT JOIN"),
     ),
     Challenge(
         id="dificil-7",
@@ -1021,20 +1057,24 @@ CHALLENGES: tuple[Challenge, ...] = (
             "GROUP BY d.id, d.nome\n"
             "ORDER BY taxa_conclusao_pct DESC, d.nome ASC;"
         ),
-        dica_duckdb="Use a função COUNT_IF(ad.status = 'concluida') do DuckDB com GROUP BY ALL.",
+        dica_duckdb="Agregue alunos_disciplinas por disciplina_id com COUNT_IF(status = 'concluida') antes de fazer JOIN com disciplinas.",
         solucao_duckdb=(
-            "SELECT\n"
-            "    d.nome AS disciplina,\n"
-            "    COUNT(ad.id) AS total_inscritos,\n"
-            "    ROUND(COUNT_IF(ad.status = 'concluida') * 100.0 / COUNT(ad.id), 2) AS taxa_conclusao_pct\n"
-            "FROM disciplinas d\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
-            "GROUP BY ALL\n"
-            "ORDER BY taxa_conclusao_pct DESC, disciplina ASC;"
+            "WITH stats_disc AS (\n"
+            "    SELECT\n"
+            "        disciplina_id,\n"
+            "        COUNT(*) AS total_inscritos,\n"
+            "        ROUND(COUNT_IF(status = 'concluida') * 100.0 / COUNT(*), 2) AS taxa_conclusao_pct\n"
+            "    FROM alunos_disciplinas\n"
+            "    GROUP BY disciplina_id\n"
+            ")\n"
+            "SELECT d.nome AS disciplina, s.total_inscritos, s.taxa_conclusao_pct\n"
+            "FROM stats_disc s\n"
+            "INNER JOIN disciplinas d ON d.id = s.disciplina_id\n"
+            "ORDER BY s.taxa_conclusao_pct DESC, disciplina ASC;"
         ),
         ordem_importa=True,
         topicos=("CASE WHEN", "Agregação Condicional", "ROUND"),
-        topicos_duckdb=("COUNT_IF()", "GROUP BY ALL", "ROUND"),
+        topicos_duckdb=("COUNT_IF()", "Pré-agregação", "ROUND"),
     ),
     Challenge(
         id="dificil-9",
@@ -1056,23 +1096,26 @@ CHALLENGES: tuple[Challenge, ...] = (
             "HAVING AVG(n.nota) > 8.5\n"
             "ORDER BY media_notas DESC, p.nome ASC;"
         ),
-        dica_duckdb=(
-            "Conecte professores -> disciplinas -> alunos_disciplinas -> notas, "
-            "use GROUP BY ALL e filtre com HAVING AVG(n.nota) > 8.5."
-        ),
+        dica_duckdb="Agrupe por d.professor_id com HAVING AVG(n.nota) > 8.5 antes de fazer JOIN com professores.",
         solucao_duckdb=(
-            "SELECT p.nome AS professor, ROUND(AVG(n.nota), 2) AS media_notas\n"
-            "FROM professores p\n"
-            "INNER JOIN disciplinas d ON d.professor_id = p.id\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "GROUP BY ALL\n"
-            "HAVING AVG(n.nota) > 8.5\n"
-            "ORDER BY media_notas DESC, professor ASC;"
+            "WITH media_prof AS (\n"
+            "    SELECT\n"
+            "        d.professor_id,\n"
+            "        ROUND(AVG(n.nota), 2) AS media_notas\n"
+            "    FROM notas n\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "    INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
+            "    GROUP BY d.professor_id\n"
+            "    HAVING AVG(n.nota) > 8.5\n"
+            ")\n"
+            "SELECT p.nome AS professor, m.media_notas\n"
+            "FROM media_prof m\n"
+            "INNER JOIN professores p ON p.id = m.professor_id\n"
+            "ORDER BY m.media_notas DESC, professor ASC;"
         ),
         ordem_importa=True,
         topicos=("Múltiplos JOINs", "GROUP BY", "HAVING"),
-        topicos_duckdb=("GROUP BY ALL", "HAVING", "Múltiplos JOINs"),
+        topicos_duckdb=("Pré-agregação", "HAVING", "CTE (WITH)"),
     ),
     Challenge(
         id="dificil-10",
@@ -1099,21 +1142,25 @@ CHALLENGES: tuple[Challenge, ...] = (
             "WHERE ranking <= 2\n"
             "ORDER BY ranking ASC, nome ASC;"
         ),
-        dica_duckdb="Agrupe por aluno (GROUP BY a.id, a.nome) e filtre a window function direto com QUALIFY ranking <= 2 (sem CTE).",
+        dica_duckdb="Agrupe alunos_disciplinas por aluno_id e aplique QUALIFY DENSE_RANK() OVER (...) <= 2 antes de fazer JOIN com alunos.",
         solucao_duckdb=(
-            "SELECT\n"
-            "    a.nome,\n"
-            "    COUNT(ad.id) AS total_disciplinas,\n"
-            "    DENSE_RANK() OVER (ORDER BY COUNT(ad.id) DESC) AS ranking\n"
-            "FROM alunos a\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
-            "GROUP BY a.id, a.nome\n"
-            "QUALIFY ranking <= 2\n"
-            "ORDER BY ranking ASC, a.nome ASC;"
+            "WITH top_alunos AS (\n"
+            "    SELECT\n"
+            "        aluno_id,\n"
+            "        COUNT(*) AS total_disciplinas,\n"
+            "        DENSE_RANK() OVER (ORDER BY COUNT(*) DESC) AS ranking\n"
+            "    FROM alunos_disciplinas\n"
+            "    GROUP BY aluno_id\n"
+            "    QUALIFY ranking <= 2\n"
+            ")\n"
+            "SELECT a.nome, t.total_disciplinas, t.ranking\n"
+            "FROM top_alunos t\n"
+            "INNER JOIN alunos a ON a.id = t.aluno_id\n"
+            "ORDER BY t.ranking ASC, a.nome ASC;"
         ),
         ordem_importa=True,
         topicos=("CTE (WITH)", "DENSE_RANK()", "Window Function"),
-        topicos_duckdb=("QUALIFY", "DENSE_RANK()", "GROUP BY"),
+        topicos_duckdb=("QUALIFY", "DENSE_RANK()", "Pré-agregação"),
     ),
     Challenge(
         id="dificil-11",
@@ -1133,18 +1180,22 @@ CHALLENGES: tuple[Challenge, ...] = (
             "HAVING COUNT(ad.id) = SUM(CASE WHEN ad.status = 'concluida' THEN 1 ELSE 0 END)\n"
             "ORDER BY total_concluidas DESC, a.nome ASC;"
         ),
-        dica_duckdb="No DuckDB, use BOOL_AND(ad.status = 'concluida') no HAVING para checar se todas as matrículas estão concluídas.",
+        dica_duckdb="Agrupe alunos_disciplinas por aluno_id com HAVING BOOL_AND(status = 'concluida') e faça JOIN com alunos apenas para os aprovados.",
         solucao_duckdb=(
-            "SELECT a.id, a.nome, COUNT(ad.id) AS total_concluidas\n"
-            "FROM alunos a\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
-            "GROUP BY ALL\n"
-            "HAVING BOOL_AND(ad.status = 'concluida')\n"
-            "ORDER BY total_concluidas DESC, a.nome ASC;"
+            "WITH concluidos AS (\n"
+            "    SELECT aluno_id, COUNT(*) AS total_concluidas\n"
+            "    FROM alunos_disciplinas\n"
+            "    GROUP BY aluno_id\n"
+            "    HAVING BOOL_AND(status = 'concluida')\n"
+            ")\n"
+            "SELECT a.id, a.nome, c.total_concluidas\n"
+            "FROM concluidos c\n"
+            "INNER JOIN alunos a ON a.id = c.aluno_id\n"
+            "ORDER BY c.total_concluidas DESC, a.nome ASC;"
         ),
         ordem_importa=True,
         topicos=("HAVING", "CASE WHEN", "NOT EXISTS"),
-        topicos_duckdb=("BOOL_AND()", "HAVING", "GROUP BY ALL"),
+        topicos_duckdb=("BOOL_AND()", "Pré-agregação", "HAVING"),
     ),
     Challenge(
         id="dificil-12",
@@ -1271,23 +1322,31 @@ CHALLENGES: tuple[Challenge, ...] = (
             "WHERE pos = 1\n"
             "ORDER BY curso ASC, disciplina ASC;"
         ),
-        dica_duckdb="Combine GROUP BY com QUALIFY RANK() OVER (PARTITION BY c.id ORDER BY AVG(n.nota) DESC) = 1 sem precisar de CTE.",
+        dica_duckdb="Pré-agregue notas por disciplina_id, filtre a maior média por curso_id com QUALIFY RANK() OVER (...) = 1 e só então faça JOIN com cursos.",
         solucao_duckdb=(
-            "SELECT\n"
-            "    c.nome AS curso,\n"
-            "    d.nome AS disciplina,\n"
-            "    ROUND(AVG(n.nota), 2) AS media_nota\n"
-            "FROM cursos c\n"
-            "INNER JOIN disciplinas d ON d.curso_id = c.id\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "GROUP BY c.id, c.nome, d.id, d.nome\n"
-            "QUALIFY RANK() OVER (PARTITION BY c.id ORDER BY AVG(n.nota) DESC) = 1\n"
-            "ORDER BY curso ASC, disciplina ASC;"
+            "WITH medias_disc AS (\n"
+            "    SELECT\n"
+            "        ad.disciplina_id,\n"
+            "        AVG(n.nota) AS media_exata,\n"
+            "        ROUND(AVG(n.nota), 2) AS media_nota\n"
+            "    FROM notas n\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "    GROUP BY ad.disciplina_id\n"
+            "),\n"
+            "vencedoras AS (\n"
+            "    SELECT d.curso_id, d.nome AS disciplina, m.media_nota\n"
+            "    FROM medias_disc m\n"
+            "    INNER JOIN disciplinas d ON d.id = m.disciplina_id\n"
+            "    QUALIFY RANK() OVER (PARTITION BY d.curso_id ORDER BY m.media_exata DESC) = 1\n"
+            ")\n"
+            "SELECT c.nome AS curso, v.disciplina, v.media_nota\n"
+            "FROM vencedoras v\n"
+            "INNER JOIN cursos c ON c.id = v.curso_id\n"
+            "ORDER BY curso ASC, v.disciplina ASC;"
         ),
         ordem_importa=True,
         topicos=("CTE (WITH)", "RANK()", "Window Function", "GROUP BY"),
-        topicos_duckdb=("QUALIFY", "RANK()", "Window Function"),
+        topicos_duckdb=("Pré-agregação", "QUALIFY", "RANK()"),
     ),
     Challenge(
         id="dificil-15",
@@ -1313,23 +1372,27 @@ CHALLENGES: tuple[Challenge, ...] = (
             "HAVING COUNT(DISTINCT d.professor_id) >= 2 AND AVG(n.nota) >= 8.5\n"
             "ORDER BY media_geral DESC, a.nome ASC;"
         ),
-        dica_duckdb="Use GROUP BY ALL e reutilize o alias no HAVING: HAVING qtd_professores >= 2 AND AVG(n.nota) >= 8.5.",
+        dica_duckdb="Agrupe por ad.aluno_id com COUNT(DISTINCT d.professor_id) e HAVING qtd_professores >= 2 AND AVG(n.nota) >= 8.5 antes de fazer JOIN com alunos.",
         solucao_duckdb=(
-            "SELECT\n"
-            "    a.nome,\n"
-            "    COUNT(DISTINCT d.professor_id) AS qtd_professores,\n"
-            "    ROUND(AVG(n.nota), 2) AS media_geral\n"
-            "FROM alunos a\n"
-            "INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n"
-            "INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
-            "INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n"
-            "GROUP BY ALL\n"
-            "HAVING qtd_professores >= 2 AND AVG(n.nota) >= 8.5\n"
-            "ORDER BY media_geral DESC, a.nome ASC;"
+            "WITH metricas AS (\n"
+            "    SELECT\n"
+            "        ad.aluno_id,\n"
+            "        COUNT(DISTINCT d.professor_id) AS qtd_professores,\n"
+            "        ROUND(AVG(n.nota), 2) AS media_geral\n"
+            "    FROM notas n\n"
+            "    INNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\n"
+            "    INNER JOIN disciplinas d ON d.id = ad.disciplina_id\n"
+            "    GROUP BY ad.aluno_id\n"
+            "    HAVING qtd_professores >= 2 AND AVG(n.nota) >= 8.5\n"
+            ")\n"
+            "SELECT a.nome, m.qtd_professores, m.media_geral\n"
+            "FROM metricas m\n"
+            "INNER JOIN alunos a ON a.id = m.aluno_id\n"
+            "ORDER BY m.media_geral DESC, a.nome ASC;"
         ),
         ordem_importa=True,
         topicos=("COUNT(DISTINCT)", "HAVING", "Múltiplos JOINs"),
-        topicos_duckdb=("GROUP BY ALL", "HAVING (Alias)", "COUNT(DISTINCT)"),
+        topicos_duckdb=("Pré-agregação", "COUNT(DISTINCT)", "HAVING (Alias)"),
     ),
 )
 
