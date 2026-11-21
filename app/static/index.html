@@ -416,7 +416,7 @@
     <section id="guide-modal" class="data-browser-modal guide-modal" role="dialog" aria-label="Guia Rápido SQLite e Dialetos">
       <header class="pane-header">
         <div class="pane-title-group">
-          <h3>Guia Rápido de SQL (SQLite • DuckDB Friendly SQL • PostgreSQL / MySQL)</h3>
+          <h3>Guia Técnico de SQL (SQLite • DuckDB Friendly SQL • Keywords &amp; Dialetos)</h3>
         </div>
         <div class="pane-controls">
           <button id="guide-maximize-btn" class="icon-btn small" title="Maximizar">⤢</button>
@@ -424,107 +424,398 @@
         </div>
       </header>
       <div class="browser-table-tabs">
-        <button class="browser-tab active" data-guide-tab="cheat">Cola Rápida SQLite</button>
-        <button class="browser-tab" data-guide-tab="friendly">Friendly SQL (DuckDB)</button>
-        <button class="browser-tab" data-guide-tab="dialects">SQLite vs DuckDB vs PostgreSQL vs MySQL</button>
+        <button class="browser-tab active" data-guide-tab="cheat">SQLite (Referência)</button>
+        <button class="browser-tab" data-guide-tab="friendly">DuckDB (Friendly SQL)</button>
+        <button class="browser-tab" data-guide-tab="keywords">Keywords &amp; Operadores</button>
+        <button class="browser-tab" data-guide-tab="dialects">Comparativo de Dialetos</button>
       </div>
       <div id="guide-body" class="guide-body">
         <div id="guide-tab-cheat" class="guide-panel">
+          <div class="guide-callout">
+            <strong>Ambiente SQLite Somente Leitura:</strong> consultas devem iniciar com <code>SELECT</code> ou <code>WITH</code> (CTE).
+            Datas estão armazenadas como texto ISO (<code>YYYY-MM-DD</code>) e divisão entre inteiros é truncada (use <code>* 1.0</code> para decimal).
+          </div>
           <div class="guide-grid">
             <div class="guide-card">
-              <h4>1. Ordem Lógica de Execução</h4>
-              <p class="muted-small">Como o banco lê sua query (diferente da ordem que você escreve):</p>
+              <h4>1. Ordem Lógica de Execução &amp; Escopo de Aliases</h4>
+              <p class="muted-small">A ordem em que o motor processa a query explica por que aliases do <code>SELECT</code> não existem no <code>WHERE</code>, mas funcionam no <code>ORDER BY</code>:</p>
               <ol class="guide-list">
-                <li><code>FROM</code> / <code>JOIN</code> (define as tabelas e junções)</li>
-                <li><code>WHERE</code> (filtra linhas antes de agrupar)</li>
-                <li><code>GROUP BY</code> (agrupa registros)</li>
-                <li><code>HAVING</code> (filtra grupos após agregação)</li>
-                <li><code>SELECT</code> (escolhe colunas e aliases)</li>
-                <li><code>ORDER BY</code> → <code>LIMIT</code> (ordena e limita)</li>
+                <li><code>FROM</code> / <code>JOIN ... ON</code> — monta o conjunto cartesiano e aplica junções</li>
+                <li><code>WHERE</code> — filtra linhas individuais antes de agrupar</li>
+                <li><code>GROUP BY</code> — consolida linhas por chave de agrupamento</li>
+                <li><code>HAVING</code> — filtra grupos (aceita <code>COUNT</code>, <code>AVG</code>, <code>SUM</code>...)</li>
+                <li><code>SELECT</code> / <code>DISTINCT</code> — projeta expressões e define aliases</li>
+                <li><code>WINDOW</code> (<code>OVER (...)</code>) — calcula funções analíticas sobre o resultado</li>
+                <li><code>ORDER BY</code> → <code>LIMIT / OFFSET</code> — ordena e recorta linhas finais</li>
               </ol>
             </div>
             <div class="guide-card">
-              <h4>2. JOIN vs LEFT JOIN</h4>
-              <p class="muted-small">Use <code>INNER JOIN</code> quando só quer correspondências nos dois lados. Use <code>LEFT JOIN</code> para manter registros da tabela à esquerda mesmo sem vínculo (ex.: alunos sem matrícula, testando <code>WHERE ad.id IS NULL</code>).</p>
+              <h4>2. Filtros, Conjuntos &amp; Tratamento de NULL</h4>
+              <p class="muted-small">No SQL, <code>NULL</code> representa valor desconhecido: <code>col = NULL</code> nunca é verdadeiro — use sempre <code>IS NULL</code> ou <code>IS NOT NULL</code>.</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT nome, idade, cidade
+FROM alunos
+WHERE cidade IN ('Curitiba', 'Porto Alegre')
+  AND idade BETWEEN 20 AND 35
+  AND nome LIKE '%Silva%'
+  AND email IS NOT NULL;</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>3. Agregação &amp; Arredondamento</h4>
-              <pre class="expected-sql-code">SELECT d.nome, ROUND(AVG(n.nota), 2) AS media
+              <h4>3. JOINs, Anti-Join (LEFT + IS NULL) &amp; N:N</h4>
+              <p class="muted-small">Use <code>INNER JOIN</code> para interseção, <code>LEFT JOIN</code> para preservar a tabela à esquerda e <code>WHERE direita.id IS NULL</code> (ou <code>NOT EXISTS</code>) para achar registros sem correspondência:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">-- Alunos sem nenhuma matrícula
+SELECT a.id, a.nome, a.email
+FROM alunos a
+LEFT JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+WHERE ad.id IS NULL;</pre>
+              </div>
+            </div>
+            <div class="guide-card">
+              <h4>4. Agregação, HAVING &amp; Agregação Condicional</h4>
+              <p class="muted-small">Toda coluna no <code>SELECT</code> fora de agregação precisa estar no <code>GROUP BY</code>. Para proporções no SQLite, multiplique por <code>100.0</code> antes de dividir:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT
+    d.nome AS disciplina,
+    COUNT(ad.id) AS inscritos,
+    ROUND(
+        SUM(CASE WHEN ad.status = 'concluida' THEN 1 ELSE 0 END) * 100.0
+        / COUNT(ad.id),
+        2
+    ) AS taxa_conclusao_pct
 FROM disciplinas d
-JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id
-JOIN notas n ON n.aluno_disciplina_id = ad.id
+INNER JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id
 GROUP BY d.id, d.nome
-HAVING AVG(n.nota) &gt;= 8.0;</pre>
+HAVING COUNT(ad.id) &gt;= 3;</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>4. CTE (WITH) &amp; Window Functions</h4>
-              <pre class="expected-sql-code">WITH ranking AS (
-    SELECT nome, nota,
-           RANK() OVER (ORDER BY nota DESC) AS pos
-    FROM ...
+              <h4>5. CTE (WITH) &amp; Window Functions</h4>
+              <p class="muted-small">Window functions preservam todas as linhas (não colapsam como <code>GROUP BY</code>). No SQLite, envolva em CTE/subquery para filtrar por posição de ranking:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">WITH ranking AS (
+    SELECT
+        d.nome AS disciplina,
+        a.nome AS aluno,
+        n.nota,
+        RANK() OVER (PARTITION BY d.id ORDER BY n.nota DESC) AS pos
+    FROM notas n
+    JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id
+    JOIN alunos a ON a.id = ad.aluno_id
+    JOIN disciplinas d ON d.id = ad.disciplina_id
 )
-SELECT * FROM ranking WHERE pos &lt;= 3;</pre>
+SELECT disciplina, aluno, nota
+FROM ranking
+WHERE pos = 1
+ORDER BY disciplina ASC, aluno ASC;</pre>
+              </div>
+            </div>
+            <div class="guide-card">
+              <h4>6. Datas, Subqueries &amp; Funções Úteis no SQLite</h4>
+              <p class="muted-small">Extração de data com <code>strftime</code>, fallback de nulos com <code>COALESCE</code> e comparação com subquery escalar:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT
+    a.nome,
+    strftime('%Y', a.data_matricula) AS ano_ingresso,
+    ROUND(AVG(n.nota), 2) AS media
+FROM alunos a
+JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+JOIN notas n ON n.aluno_disciplina_id = ad.id
+WHERE strftime('%Y', a.data_matricula) = '2024'
+GROUP BY a.id, a.nome, a.data_matricula
+HAVING AVG(n.nota) &gt; (SELECT AVG(nota) FROM notas);</pre>
+              </div>
             </div>
           </div>
         </div>
 
         <div id="guide-tab-friendly" class="guide-panel hidden">
-          <p class="guide-intro">
-            No modo <strong>DuckDB (Friendly SQL)</strong>, qualquer SQL padrão válido no DuckDB é aceito na avaliação,
-            e você ainda pode usar os atalhos ergonômicos abaixo:
-          </p>
+          <div class="guide-callout friendly">
+            <strong>Importante — <code>SELECT</code> e <code>WITH</code> continuam 100% válidos:</strong> no DuckDB você <strong>não precisa</strong> começar queries com <code>FROM</code>.
+            Você pode escrever SQL tradicional (<code>SELECT ... FROM ...</code>) e usar livremente os recursos de <strong>Friendly SQL</strong> dentro dele — o <code>FROM</code> no início (<em>FROM-first</em>) é apenas um atalho opcional.
+          </div>
           <div class="guide-grid">
             <div class="guide-card">
-              <h4>1. FROM-first &amp; ORDER BY ALL</h4>
-              <p class="muted-small">Comece pela tabela e deixe o <code>SELECT</code> para depois; ordene todas as colunas com <code>ORDER BY ALL</code>:</p>
-              <pre class="expected-sql-code">FROM alunos
-SELECT DISTINCT cidade
-ORDER BY ALL;</pre>
+              <h4>1. Formas Válidas de Iniciar uma Query</h4>
+              <p class="muted-small">Todas as variações abaixo são válidas no DuckDB e produzem o mesmo plano de execução:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">-- 1) Padrão SQL tradicional (recomendado e universal)
+SELECT nome, idade FROM alunos WHERE idade &gt; 30;
+
+-- 2) FROM-first opcional (útil em exploração)
+FROM alunos SELECT nome, idade WHERE idade &gt; 30;
+
+-- 3) SELECT * implícito e inspeção rápida (Modo Livre)
+FROM alunos LIMIT 10;
+SUMMARIZE alunos;
+DESCRIBE alunos;</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>2. GROUP BY ALL &amp; Alias no HAVING</h4>
-              <p class="muted-small">Agrupe automaticamente por todas as colunas não agregadas e reutilize aliases no <code>HAVING</code>:</p>
-              <pre class="expected-sql-code">FROM professores p
-JOIN disciplinas d ON d.professor_id = p.id
-SELECT p.nome, COUNT(d.id) AS total
+              <h4>2. GROUP BY ALL, ORDER BY ALL &amp; Alias no HAVING</h4>
+              <p class="muted-small">Funciona normalmente com queries iniciadas por <code>SELECT</code>. <code>GROUP BY ALL</code> infere todas as colunas não agregadas do <code>SELECT</code>, e o <code>HAVING</code> aceita aliases definidos no <code>SELECT</code>:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT
+    p.nome AS professor,
+    COUNT(d.id) AS total_disciplinas
+FROM professores p
+INNER JOIN disciplinas d ON d.professor_id = p.id
 GROUP BY ALL
-HAVING total &gt;= 2;</pre>
+HAVING total_disciplinas &gt;= 2
+ORDER BY total_disciplinas DESC, professor ASC;</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>3. QUALIFY (filtrar Window Functions sem CTE)</h4>
-              <p class="muted-small">Filtre <code>RANK()</code> ou <code>DENSE_RANK()</code> direto na consulta (quando houver <code>GROUP BY</code>, liste as colunas explicitamente ao usar <code>QUALIFY</code>):</p>
-              <pre class="expected-sql-code">FROM notas
-SELECT aluno_disciplina_id, nota
-QUALIFY RANK() OVER (ORDER BY nota DESC) &lt;= 3;</pre>
+              <h4>3. QUALIFY &amp; Cláusula WINDOW Nomeada</h4>
+              <p class="muted-small"><code>QUALIFY</code> filtra o resultado de window functions sem precisar de CTE/subquery. <em>Regra do DuckDB 2.x:</em> quando combinar <code>QUALIFY</code> com <code>GROUP BY</code>, liste as colunas explicitamente no <code>GROUP BY</code> (em vez de <code>GROUP BY ALL</code>):</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT
+    a.nome,
+    COUNT(ad.id) AS total_disciplinas,
+    DENSE_RANK() OVER (ORDER BY COUNT(ad.id) DESC) AS ranking
+FROM alunos a
+INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+GROUP BY a.id, a.nome
+QUALIFY ranking &lt;= 2
+ORDER BY ranking ASC, a.nome ASC;</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>4. ANTI JOIN, COUNT_IF &amp; BOOL_AND</h4>
-              <p class="muted-small">Substitua <code>LEFT JOIN ... WHERE IS NULL</code> por <code>ANTI JOIN</code> e agregações condicionais por <code>COUNT_IF</code> / <code>BOOL_AND</code>:</p>
-              <pre class="expected-sql-code">FROM alunos a
-ANTI JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
-SELECT a.id, a.nome;</pre>
+              <h4>4. COUNT_IF, BOOL_AND &amp; Aliases Laterais</h4>
+              <p class="muted-small">Substitua <code>SUM(CASE WHEN ...)</code> por <code>COUNT_IF(...)</code> ou <code>FILTER (WHERE ...)</code>, verifique condição universal com <code>BOOL_AND(...)</code> e reutilize aliases calculados no mesmo <code>SELECT</code>:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT
+    d.nome AS disciplina,
+    COUNT(ad.id) AS inscritos,
+    ROUND(COUNT_IF(ad.status = 'concluida') * 100.0 / inscritos, 2) AS taxa_pct
+FROM disciplinas d
+JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id
+GROUP BY ALL
+ORDER BY taxa_pct DESC;
+
+-- Alunos com 100% das matrículas concluídas:
+SELECT a.id, a.nome, COUNT(ad.id) AS total
+FROM alunos a
+JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+GROUP BY ALL
+HAVING BOOL_AND(ad.status = 'concluida');</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>5. PIVOT, EXCLUDE &amp; SUMMARIZE</h4>
-              <p class="muted-small">Crie tabelas dinâmicas nativas com <code>PIVOT</code>, remova colunas com <code>SELECT * EXCLUDE (col)</code> e explore tabelas no Modo Livre com <code>SUMMARIZE alunos;</code>.</p>
-              <pre class="expected-sql-code">PIVOT (FROM alunos_disciplinas SELECT status)
+              <h4>5. ANTI JOIN, SEMI JOIN &amp; PIVOT Nativo</h4>
+              <p class="muted-small"><code>ANTI JOIN</code> retorna linhas da esquerda sem correspondência à direita; <code>SEMI JOIN</code> retorna linhas com pelo menos 1 correspondência sem duplicar registros; <code>PIVOT</code> transforma valores em colunas:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">-- Cursos sem disciplinas (também funciona com SELECT ... FROM ... ANTI JOIN ...)
+SELECT c.id, c.nome, c.categoria
+FROM cursos c
+ANTI JOIN disciplinas d ON d.curso_id = c.id;
+
+-- Matriz de status de matrículas
+PIVOT (SELECT status FROM alunos_disciplinas)
 ON status IN ('cursando', 'concluida', 'trancada')
 USING COUNT(*);</pre>
+              </div>
             </div>
             <div class="guide-card">
-              <h4>6. Datas &amp; Busca Case-Insensitive</h4>
-              <p class="muted-small">As datas no DuckDB usam o tipo <code>DATE</code>. Use <code>YEAR(data_matricula) = 2025</code>, literais <code>DATE '2020-01-01'</code> e <code>ILIKE '%dados%'</code>.</p>
+              <h4>6. Datas (DATE), ILIKE, EXCLUDE / REPLACE &amp; Divisão</h4>
+              <p class="muted-small">No DuckDB, colunas de data são <code>DATE</code>, <code>/</code> entre inteiros retorna decimal (<code>5 / 2 = 2.5</code>; use <code>5 // 2</code> para divisão inteira) e <code>strftime</code> recebe a data antes do formato:</p>
+              <div class="guide-code-wrap">
+                <button type="button" class="guide-copy-btn">Copiar</button>
+                <pre class="guide-code">SELECT nome, cidade, data_matricula
+FROM alunos
+WHERE YEAR(data_matricula) = 2025
+  AND data_matricula &gt;= DATE '2025-02-01'
+  AND cidade ILIKE '%são paulo%';
+
+-- Projeção dinâmica excluindo ou transformando colunas:
+SELECT * EXCLUDE (email, data_contratacao) REPLACE (ROUND(salario, 0) AS salario)
+FROM professores;</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="guide-tab-keywords" class="guide-panel hidden">
+          <p class="guide-intro">
+            Referência técnica das principais palavras-chave, operadores, funções e armadilhas comuns avaliadas nos exercícios e no Modo Livre.
+          </p>
+
+          <h4 class="guide-section-title">1. Cláusulas Estruturais</h4>
+          <div class="table-scroll">
+            <table class="data-table guide-table">
+              <thead>
+                <tr>
+                  <th>Keyword</th>
+                  <th>Motor</th>
+                  <th>Função Técnica</th>
+                  <th>Exemplo</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><span class="kw-pill">SELECT</span> / <span class="kw-pill">DISTINCT</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Projeta colunas/expressões calculadas; <code>DISTINCT</code> elimina duplicatas do resultado.</td>
+                  <td><code>SELECT DISTINCT cidade FROM alunos;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">FROM</span> (padrão ou <em>FROM-first</em>)</td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Define a fonte de dados. No DuckDB, pode opcionalmente abrir a query antes do <code>SELECT</code>.</td>
+                  <td><code>SELECT nome FROM alunos;</code> / <code>FROM alunos SELECT nome;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">INNER</span> / <span class="kw-pill">LEFT JOIN</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td><code>INNER</code> exige match nos dois lados; <code>LEFT</code> preserva todas as linhas da tabela à esquerda.</td>
+                  <td><code>FROM alunos a LEFT JOIN alunos_disciplinas ad ON ad.aluno_id = a.id</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">ANTI JOIN</span> / <span class="kw-pill">SEMI JOIN</span></td>
+                  <td><span class="engine-tag duckdb-only">DuckDB</span></td>
+                  <td>Atalho para <code>NOT EXISTS</code> (sem correspondência) e <code>EXISTS</code> (com correspondência sem duplicar).</td>
+                  <td><code>SELECT c.nome FROM cursos c ANTI JOIN disciplinas d ON d.curso_id = c.id;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">WHERE</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Filtra linhas <strong>antes</strong> do agrupamento. Não aceita agregações (<code>AVG</code>, <code>COUNT</code>) nem window functions.</td>
+                  <td><code>WHERE idade BETWEEN 25 AND 30 AND cidade != 'Recife'</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">GROUP BY</span> / <span class="kw-pill">GROUP BY ALL</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Agrupa linhas por chave. <code>GROUP BY ALL</code> (DuckDB) deduz automaticamente todas as colunas não agregadas do <code>SELECT</code>.</td>
+                  <td><code>SELECT cidade, COUNT(*) FROM alunos GROUP BY ALL;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">HAVING</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Filtra grupos <strong>após</strong> o <code>GROUP BY</code> com base em funções agregadas. No DuckDB, aceita aliases do <code>SELECT</code>.</td>
+                  <td><code>HAVING COUNT(d.id) &gt;= 2 AND AVG(n.nota) &gt;= 8.0</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">WINDOW</span> / <span class="kw-pill">OVER</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Define janelas de partição e ordenação para cálculos analíticos sem colapsar linhas.</td>
+                  <td><code>AVG(nota) OVER (PARTITION BY d.id)</code> ou <code>WINDOW w AS (PARTITION BY d.id)</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">QUALIFY</span></td>
+                  <td><span class="engine-tag duckdb-only">DuckDB</span></td>
+                  <td>Filtra o resultado de window functions diretamente na query, dispensando CTE/subquery.</td>
+                  <td><code>SELECT ..., RANK() OVER (...) AS r FROM ... QUALIFY r = 1;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">ORDER BY</span> / <span class="kw-pill">ORDER BY ALL</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Ordena resultados (<code>ASC</code> padrão, <code>DESC</code> decrescente). <code>ORDER BY ALL</code> (DuckDB) ordena por todas as colunas projetadas.</td>
+                  <td><code>ORDER BY nota DESC, nome ASC</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">LIMIT</span> / <span class="kw-pill">OFFSET</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Restringe a quantidade máxima de linhas retornadas e permite pular linhas iniciais.</td>
+                  <td><code>LIMIT 10 OFFSET 0</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">WITH</span> (CTE)</td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Define consultas nomeadas temporárias para organizar cálculos em etapas e subqueries reutilizáveis.</td>
+                  <td><code>WITH medias AS (SELECT ...) SELECT * FROM medias;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">UNION</span> / <span class="kw-pill">UNION ALL</span></td>
+                  <td><span class="engine-tag both">SQLite + DuckDB</span></td>
+                  <td>Empilha resultados de consultas com mesmo número de colunas. <code>UNION</code> remove duplicatas; <code>UNION ALL</code> mantém tudo (mais rápido).</td>
+                  <td><code>SELECT nome FROM alunos UNION ALL SELECT nome FROM professores;</code></td>
+                </tr>
+                <tr>
+                  <td><span class="kw-pill">PIVOT</span> / <span class="kw-pill">EXCLUDE</span> / <span class="kw-pill">SUMMARIZE</span></td>
+                  <td><span class="engine-tag duckdb-only">DuckDB</span></td>
+                  <td><code>PIVOT</code> transforma categorias em colunas; <code>* EXCLUDE (c)</code> omite colunas; <code>SUMMARIZE</code> perfila a tabela (Modo Livre).</td>
+                  <td><code>SELECT * EXCLUDE (email) FROM alunos;</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4 class="guide-section-title">2. Operadores &amp; Funções Essenciais</h4>
+          <div class="table-scroll">
+            <table class="data-table guide-table">
+              <thead>
+                <tr>
+                  <th>Categoria</th>
+                  <th>Símbolos / Funções</th>
+                  <th>Comportamento e Observações</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Comparação &amp; Lógicos</td>
+                  <td><code>=</code>, <code>!=</code> / <code>&lt;&gt;</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>AND</code>, <code>OR</code>, <code>NOT</code></td>
+                  <td><code>AND</code> tem precedência maior que <code>OR</code>: sempre use parênteses ao misturar os dois (<code>WHERE (a = 1 OR b = 2) AND c = 3</code>).</td>
+                </tr>
+                <tr>
+                  <td>Faixas, Listas &amp; Padrões</td>
+                  <td><code>BETWEEN a AND b</code>, <code>IN (...)</code>, <code>LIKE</code>, <code>ILIKE</code>, <code>IS NULL</code></td>
+                  <td><code>BETWEEN</code> é inclusivo nos dois extremos. Em padrões, <code>%</code> casa 0+ caracteres e <code>_</code> casa exatamente 1 caractere.</td>
+                </tr>
+                <tr>
+                  <td>Subqueries &amp; Condicional</td>
+                  <td><code>EXISTS (...)</code>, <code>NOT EXISTS (...)</code>, <code>CASE WHEN ... THEN ... ELSE ... END</code></td>
+                  <td><code>NOT EXISTS</code> é imune a <code>NULL</code> na subquery (ao contrário de <code>NOT IN</code> quando há <code>NULL</code> retornado).</td>
+                </tr>
+                <tr>
+                  <td>Agregação</td>
+                  <td><code>COUNT(*)</code>, <code>COUNT(col)</code>, <code>COUNT(DISTINCT col)</code>, <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>COUNT_IF</code>, <code>BOOL_AND</code></td>
+                  <td><code>COUNT(*)</code> conta todas as linhas; <code>COUNT(col)</code> e <code>AVG(col)</code> ignoram <code>NULL</code>. <code>COUNT_IF</code> e <code>BOOL_AND</code> são nativos do DuckDB.</td>
+                </tr>
+                <tr>
+                  <td>Window Functions</td>
+                  <td><code>RANK()</code>, <code>DENSE_RANK()</code>, <code>ROW_NUMBER()</code>, <code>LAG()</code>, <code>LEAD()</code>, <code>AVG() OVER (...)</code></td>
+                  <td>Em empates <code>[10, 10, 9]</code>: <code>ROW_NUMBER</code> gera <code>1,2,3</code>; <code>RANK</code> gera <code>1,1,3</code>; <code>DENSE_RANK</code> gera <code>1,1,2</code>.</td>
+                </tr>
+                <tr>
+                  <td>Texto, Datas &amp; Conversão</td>
+                  <td><code>ROUND(x, 2)</code>, <code>COALESCE(a, b)</code>, <code>LOWER/UPPER</code>, <code>CAST(x AS ...)</code>, <code>strftime</code>, <code>YEAR()</code></td>
+                  <td>No SQLite: <code>strftime('%Y', col)</code>. No DuckDB: <code>YEAR(col)</code> ou <code>strftime(col, '%Y')</code>; cast curto com <code>col::DATE</code>.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4 class="guide-section-title">3. Armadilhas Comuns (Resumo Rápido)</h4>
+          <div class="guide-grid">
+            <div class="guide-card">
+              <h4>WHERE vs HAVING vs QUALIFY</h4>
+              <p class="muted-small"><code>WHERE</code> filtra linhas cruas antes de agrupar; <code>HAVING</code> filtra grupos criados pelo <code>GROUP BY</code>; <code>QUALIFY</code> (DuckDB) filtra resultados de funções de janela (<code>RANK()</code>, <code>AVG() OVER</code>).</p>
+            </div>
+            <div class="guide-card">
+              <h4>COUNT(*) vs COUNT(col) em LEFT JOIN</h4>
+              <p class="muted-small">Em um <code>LEFT JOIN</code>, usar <code>COUNT(*)</code> conta a linha do lado esquerdo como <code>1</code> mesmo quando não há match à direita. Use sempre <code>COUNT(tabela_direita.id)</code> para contar apenas correspondências reais.</p>
             </div>
           </div>
         </div>
 
         <div id="guide-tab-dialects" class="guide-panel hidden">
           <p class="guide-intro">
-            Você pode alternar no topo entre <strong>SQLite</strong> e <strong>DuckDB (Friendly SQL)</strong> (ambos com a mesma base acadêmica).
-            Abaixo estão as principais diferenças entre os motores e <strong>PostgreSQL</strong> / <strong>MySQL</strong>:
+            Você pode alternar no topo entre <strong>SQLite</strong> e <strong>DuckDB (Friendly SQL)</strong> (ambos com os mesmos registros).
+            Abaixo está o comparativo técnico detalhado entre os motores do playground, <strong>PostgreSQL</strong> e <strong>MySQL</strong>:
           </p>
           <div class="table-scroll">
-            <table class="data-table">
+            <table class="data-table guide-table">
               <thead>
                 <tr>
                   <th>Recurso</th>
@@ -536,9 +827,23 @@ USING COUNT(*);</pre>
               </thead>
               <tbody>
                 <tr>
+                  <td>Início da query</td>
+                  <td><code>SELECT</code> ou <code>WITH</code></td>
+                  <td><code>SELECT</code>, <code>WITH</code>, ou opcional <code>FROM</code>-first, <code>PIVOT</code>, <code>SUMMARIZE</code></td>
+                  <td><code>SELECT</code> ou <code>WITH</code></td>
+                  <td><code>SELECT</code> ou <code>WITH</code></td>
+                </tr>
+                <tr>
+                  <td>Tipos na base exemplo</td>
+                  <td><code>TEXT</code> (datas ISO), <code>REAL</code>, <code>INTEGER</code></td>
+                  <td><code>DATE</code> (datas), <code>DECIMAL(10,2)/(4,2)</code>, <code>VARCHAR</code></td>
+                  <td><code>DATE</code>, <code>NUMERIC</code>, <code>TEXT</code></td>
+                  <td><code>DATE</code>, <code>DECIMAL</code>, <code>VARCHAR</code></td>
+                </tr>
+                <tr>
                   <td>Extrair ano de data</td>
-                  <td><code>strftime('%Y', data)</code></td>
-                  <td><code>YEAR(data)</code> ou <code>strftime(data, '%Y')</code></td>
+                  <td><code>strftime('%Y', data)</code> (retorna texto)</td>
+                  <td><code>YEAR(data)</code> (int) ou <code>strftime(data, '%Y')</code></td>
                   <td><code>EXTRACT(YEAR FROM data::date)</code></td>
                   <td><code>YEAR(data)</code></td>
                 </tr>
@@ -566,16 +871,37 @@ USING COUNT(*);</pre>
                 <tr>
                   <td>Agrupar colunas</td>
                   <td>Listar todas no <code>GROUP BY</code></td>
-                  <td><code>GROUP BY ALL</code></td>
+                  <td><code>GROUP BY</code> explícito ou <code>GROUP BY ALL</code></td>
                   <td>Listar todas no <code>GROUP BY</code></td>
                   <td>Listar todas no <code>GROUP BY</code></td>
                 </tr>
                 <tr>
                   <td>Filtrar Window Function</td>
                   <td>CTE / subquery + <code>WHERE</code></td>
-                  <td><code>QUALIFY</code> direto na query</td>
+                  <td><code>QUALIFY</code> direto na query (ou CTE)</td>
                   <td>CTE / subquery + <code>WHERE</code></td>
                   <td>CTE / subquery + <code>WHERE</code></td>
+                </tr>
+                <tr>
+                  <td>Anti-join (sem vínculo)</td>
+                  <td><code>LEFT JOIN ... WHERE b.id IS NULL</code> / <code>NOT EXISTS</code></td>
+                  <td><code>ANTI JOIN</code> (ou <code>LEFT JOIN ... IS NULL</code> / <code>NOT EXISTS</code>)</td>
+                  <td><code>LEFT JOIN ... WHERE b.id IS NULL</code> / <code>NOT EXISTS</code></td>
+                  <td><code>LEFT JOIN ... WHERE b.id IS NULL</code> / <code>NOT EXISTS</code></td>
+                </tr>
+                <tr>
+                  <td>Agregação condicional</td>
+                  <td><code>SUM(CASE WHEN cond THEN 1 ELSE 0 END)</code></td>
+                  <td><code>COUNT_IF(cond)</code> ou <code>FILTER (WHERE cond)</code></td>
+                  <td><code>COUNT(*) FILTER (WHERE cond)</code></td>
+                  <td><code>SUM(CASE WHEN cond THEN 1 ELSE 0 END)</code></td>
+                </tr>
+                <tr>
+                  <td>Pivot / linhas em colunas</td>
+                  <td><code>SUM(CASE WHEN ...)</code> manual</td>
+                  <td>Instrução <code>PIVOT ... ON ... USING ...</code></td>
+                  <td><code>crosstab()</code> (tablefunc) ou <code>CASE WHEN</code></td>
+                  <td><code>SUM(CASE WHEN ...)</code> manual</td>
                 </tr>
                 <tr>
                   <td>Concatenar grupo</td>

@@ -650,7 +650,7 @@ def translate_duckdb_error(error_msg: str) -> str | None:
     if "parser error" in lower or "syntax error" in lower:
         return (
             "Dica: erro de sintaxe no DuckDB. Verifique aspas simples para textos, parênteses fechados "
-            "e a estrutura das cláusulas (no Friendly SQL você pode começar com FROM ou SELECT, e filtrar window functions com QUALIFY)."
+            "e a ordem das cláusulas (SELECT ... FROM ... padrão ou FROM-first opcional, GROUP BY ALL, QUALIFY)."
         )
 
     if "no function matches the given name and argument types 'strftime" in lower:

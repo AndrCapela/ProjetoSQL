@@ -35,16 +35,17 @@
       label: "DuckDB (Friendly SQL)",
       shortLabel: "DuckDB",
       brandSub: "Base Acadêmica • DuckDB Friendly SQL Read-Only",
-      placeholder: "Ex: FROM alunos SELECT nome, idade, cidade WHERE idade > 30;",
+      placeholder: "Ex: SELECT nome, idade FROM alunos WHERE idade > 30;  -- ou FROM alunos SELECT ...",
       freeDescriptionHtml:
-        "Teste consultas em <strong>DuckDB</strong> usando SQL padrão ou <strong>Friendly SQL</strong> " +
-        "(<code>FROM</code>-first, <code>GROUP BY ALL</code>, <code>QUALIFY</code>, <code>PIVOT</code>, " +
-        "<code>ANTI JOIN</code>, <code>SUMMARIZE</code>) na mesma base acadêmica.",
+        "Escreva consultas iniciando normalmente com <code>SELECT</code> ou <code>WITH</code>, " +
+        "ou aproveite atalhos opcionais do <strong>Friendly SQL</strong> (<code>FROM</code>-first, " +
+        "<code>GROUP BY ALL</code>, <code>QUALIFY</code>, <code>ANTI JOIN</code>, <code>PIVOT</code>, " +
+        "<code>SUMMARIZE</code>) na mesma base acadêmica.",
       expectedSqlLabel: "Query SQL Correta (Friendly SQL / DuckDB)",
       explainMessage:
         "Plano de execução DuckDB (EXPLAIN): veja abaixo os operadores físicos da consulta.",
       chatWelcome:
-        "Olá! Sou o **Tutor SQL**.\nVocê está usando **DuckDB (Friendly SQL)**. Pergunte sobre `FROM`-first, `GROUP BY ALL`, `QUALIFY`, `PIVOT`, `ANTI JOIN` ou qualquer erro SQL!",
+        "Olá! Sou o **Tutor SQL**.\nVocê está usando **DuckDB (Friendly SQL)** — pode escrever `SELECT` / `WITH` padrão ou usar atalhos opcionais como `GROUP BY ALL`, `QUALIFY`, `ANTI JOIN`, `PIVOT` e `FROM`-first!",
     },
   };
 
@@ -756,14 +757,14 @@
           "FROM notas n\nINNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nSELECT\n    a.nome AS aluno,\n    d.nome AS disciplina,\n    n.avaliacao,\n    n.nota\nORDER BY n.nota DESC, a.nome ASC\nLIMIT 15;",
       },
       join_completo: {
-        label: "JOIN + GROUP BY ALL",
+        label: "SELECT + GROUP BY ALL",
         sql:
-          "FROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nSELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nGROUP BY ALL\nORDER BY media_nota DESC;",
+          "SELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nFROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nGROUP BY ALL\nORDER BY media_nota DESC;",
       },
       media_disciplina: {
-        label: "QUALIFY (sem CTE)",
+        label: "SELECT + QUALIFY",
         sql:
-          "FROM alunos a\nINNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\nINNER JOIN notas n ON n.aluno_disciplina_id = ad.id\nSELECT\n    a.nome,\n    COUNT(n.id) AS qtd_notas,\n    ROUND(AVG(n.nota), 2) AS media_geral,\n    RANK() OVER (ORDER BY AVG(n.nota) DESC) AS ranking\nGROUP BY a.id, a.nome\nQUALIFY ranking <= 10\nORDER BY ranking ASC, a.nome ASC;",
+          "SELECT\n    a.nome,\n    COUNT(n.id) AS qtd_notas,\n    ROUND(AVG(n.nota), 2) AS media_geral,\n    RANK() OVER (ORDER BY AVG(n.nota) DESC) AS ranking\nFROM alunos a\nINNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\nINNER JOIN notas n ON n.aluno_disciplina_id = ad.id\nGROUP BY a.id, a.nome\nQUALIFY ranking <= 10\nORDER BY ranking ASC, a.nome ASC;",
       },
       cte_ranking: {
         label: "SUMMARIZE tabela",
@@ -2093,6 +2094,7 @@
     });
     $("guide-tab-cheat").classList.toggle("hidden", target !== "cheat");
     $("guide-tab-friendly").classList.toggle("hidden", target !== "friendly");
+    $("guide-tab-keywords").classList.toggle("hidden", target !== "keywords");
     $("guide-tab-dialects").classList.toggle("hidden", target !== "dialects");
   }
 
@@ -2179,6 +2181,22 @@
       tabBtn.addEventListener("click", () => {
         setActiveGuideTab(tabBtn.dataset.guideTab);
       });
+    });
+
+    $("guide-body").addEventListener("click", async (e) => {
+      const btn = e.target.closest(".guide-copy-btn");
+      if (!btn) return;
+      const codeEl = btn.parentElement ? btn.parentElement.querySelector("pre") : null;
+      if (!codeEl) return;
+      try {
+        await navigator.clipboard.writeText(codeEl.textContent || "");
+        btn.textContent = "Copiado!";
+        setTimeout(() => {
+          btn.textContent = "Copiar";
+        }, 1200);
+      } catch {
+        btn.textContent = "Erro";
+      }
     });
 
     window.addEventListener("resize", () => {
