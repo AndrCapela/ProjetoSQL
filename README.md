@@ -1,8 +1,10 @@
 # SQL Arena — Treinamento Interativo de SQL
 
-Plataforma web em **FastAPI + SQLite** para praticar consultas SQL (`SELECT` / `WITH`) em uma base acadêmica de exemplo com desafios nos níveis **Fácil**, **Médio** e **Difícil**, além de **Modo Livre** e **Explorador de Tabelas**.
+Plataforma web em **FastAPI + SQLite + DuckDB (Friendly SQL)** para praticar consultas SQL (`SELECT`, `WITH`, `FROM`-first, `GROUP BY ALL`, `QUALIFY`, `PIVOT`, `ANTI JOIN`) em uma mesma base acadêmica espelhada nos dois motores, com 40 desafios nos níveis **Fácil**, **Médio** e **Difícil**, **Modo Livre**, **Explorador de Tabelas**, **DER visual** e **Tutor SQL**.
 
-## Estrutura do Banco de Dados (`data/escola.db`)
+## Estrutura das Bases de Dados (`data/escola.db` e `data/escola.duckdb`)
+
+Ambas as bases compartilham exatamente as mesmas 6 tabelas e os mesmos registros:
 
 - `professores` (10 registros) — 1:N com `disciplinas`
 - `cursos` (12 registros) — 1:N com `disciplinas`
@@ -11,6 +13,8 @@ Plataforma web em **FastAPI + SQLite** para praticar consultas SQL (`SELECT` / `
 - `alunos_disciplinas` (108 registros) — relação N:N entre `alunos` e `disciplinas`
 - `notas` (159 registros) — avaliações ligadas às matrículas em `alunos_disciplinas`
 
+No frontend, o usuário pode alternar livremente entre **SQLite** e **DuckDB (Friendly SQL)**. Cada tecnologia mantém progresso de exercícios resolvidos, rascunhos e histórico separados, e no modo DuckDB qualquer SQL válido (ANSI padrão ou Friendly SQL) que retorne o resultado esperado é aceito.
+
 ## Como executar
 
 1. Instalar dependências (se ainda não estiverem instaladas):
@@ -18,7 +22,7 @@ Plataforma web em **FastAPI + SQLite** para praticar consultas SQL (`SELECT` / `
    pip install -r requirements.txt
    ```
 
-2. (Opcional) Recriar/repopular a base SQLite do zero:
+2. (Opcional) Recriar/repopular as bases SQLite e DuckDB do zero:
    ```bash
    python -m app.database
    ```

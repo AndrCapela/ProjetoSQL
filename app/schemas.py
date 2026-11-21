@@ -7,10 +7,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 DifficultyLevel = Literal["facil", "medio", "dificil"]
+DatabaseEngine = Literal["sqlite", "duckdb"]
 
 
 class ColumnSchema(BaseModel):
-    """Metadados de uma coluna no banco SQLite."""
+    """Metadados de uma coluna no banco de dados."""
 
     name: str
     type: str
@@ -20,7 +21,7 @@ class ColumnSchema(BaseModel):
 
 
 class TableSchema(BaseModel):
-    """Metadados de uma tabela no banco SQLite."""
+    """Metadados de uma tabela no banco de dados."""
 
     name: str
     row_count: int
@@ -44,6 +45,7 @@ class QueryPayload(BaseModel):
 
     sql: str = Field(..., min_length=1, max_length=10_000)
     challenge_id: str | None = None
+    engine: DatabaseEngine = "sqlite"
 
 
 class TableResult(BaseModel):
@@ -67,6 +69,7 @@ class ExecuteQueryResponse(BaseModel):
     """Resposta completa da execução no modo desafio ou modo livre."""
 
     mode: Literal["challenge", "free"]
+    engine: DatabaseEngine = "sqlite"
     challenge_id: str | None = None
     user_result: TableResult | None = None
     user_error: str | None = None
@@ -92,6 +95,7 @@ class ChatPayload(BaseModel):
     history: list[ChatMessage] = Field(default_factory=list, max_length=12)
     sql: str | None = Field(default=None, max_length=10_000)
     challenge_id: str | None = None
+    engine: DatabaseEngine = "sqlite"
     last_error: str | None = Field(default=None, max_length=2_000)
     last_feedback: str | None = Field(default=None, max_length=1_000)
     last_result_summary: str | None = Field(default=None, max_length=2_000)

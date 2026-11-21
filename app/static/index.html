@@ -18,12 +18,17 @@
           <span class="brand-badge">SQL</span>
           <div>
             <h1>SQL Arena</h1>
-            <p class="brand-sub">Base Acadêmica • SQLite Read-Only</p>
+            <p id="brand-sub" class="brand-sub">Base Acadêmica • SQLite Read-Only</p>
           </div>
         </div>
       </div>
 
       <div class="topbar-center">
+        <div class="engine-switch" role="group" aria-label="Base de dados">
+          <button id="engine-sqlite-btn" type="button" class="engine-btn active" data-engine="sqlite" title="Executar consultas na base SQLite">SQLite</button>
+          <button id="engine-duckdb-btn" type="button" class="engine-btn" data-engine="duckdb" title="Executar consultas na base DuckDB com Friendly SQL">DuckDB (Friendly SQL)</button>
+        </div>
+
         <div class="mode-switch" role="group" aria-label="Modo de uso">
           <button id="mode-challenge-btn" class="mode-btn active" data-mode="challenge">Desafios</button>
           <button id="mode-free-btn" class="mode-btn" data-mode="free">Modo Livre</button>
@@ -134,7 +139,7 @@
               <span class="badge badge-free">Modo Livre</span>
               <h2>Playground SQL Somente Leitura</h2>
             </div>
-            <p class="challenge-description">
+            <p id="free-mode-description" class="challenge-description">
               Teste qualquer consulta <code>SELECT</code> ou <code>WITH</code> livremente na base acadêmica
               (<code>professores</code>, <code>cursos</code>, <code>disciplinas</code>, <code>alunos</code>,
               <code>alunos_disciplinas</code> e <code>notas</code>).
@@ -310,7 +315,7 @@
               <div class="pane-body">
                 <div class="expected-sql-box">
                   <div class="expected-sql-header">
-                    <span>Query SQL Correta</span>
+                    <span id="expected-sql-label">Query SQL Correta</span>
                     <div class="expected-sql-actions">
                       <button id="toggle-expected-sql-btn" class="btn btn-ghost tiny">Revelar solução</button>
                       <button id="copy-expected-sql-btn" class="btn btn-ghost tiny hidden">Copiar</button>
@@ -411,7 +416,7 @@
     <section id="guide-modal" class="data-browser-modal guide-modal" role="dialog" aria-label="Guia Rápido SQLite e Dialetos">
       <header class="pane-header">
         <div class="pane-title-group">
-          <h3>Guia Rápido de SQL (SQLite + PostgreSQL / MySQL)</h3>
+          <h3>Guia Rápido de SQL (SQLite • DuckDB Friendly SQL • PostgreSQL / MySQL)</h3>
         </div>
         <div class="pane-controls">
           <button id="guide-maximize-btn" class="icon-btn small" title="Maximizar">⤢</button>
@@ -420,7 +425,8 @@
       </header>
       <div class="browser-table-tabs">
         <button class="browser-tab active" data-guide-tab="cheat">Cola Rápida SQLite</button>
-        <button class="browser-tab" data-guide-tab="dialects">SQLite vs PostgreSQL vs MySQL</button>
+        <button class="browser-tab" data-guide-tab="friendly">Friendly SQL (DuckDB)</button>
+        <button class="browser-tab" data-guide-tab="dialects">SQLite vs DuckDB vs PostgreSQL vs MySQL</button>
       </div>
       <div id="guide-body" class="guide-body">
         <div id="guide-tab-cheat" class="guide-panel">
@@ -462,17 +468,68 @@ SELECT * FROM ranking WHERE pos &lt;= 3;</pre>
           </div>
         </div>
 
+        <div id="guide-tab-friendly" class="guide-panel hidden">
+          <p class="guide-intro">
+            No modo <strong>DuckDB (Friendly SQL)</strong>, qualquer SQL padrão válido no DuckDB é aceito na avaliação,
+            e você ainda pode usar os atalhos ergonômicos abaixo:
+          </p>
+          <div class="guide-grid">
+            <div class="guide-card">
+              <h4>1. FROM-first &amp; ORDER BY ALL</h4>
+              <p class="muted-small">Comece pela tabela e deixe o <code>SELECT</code> para depois; ordene todas as colunas com <code>ORDER BY ALL</code>:</p>
+              <pre class="expected-sql-code">FROM alunos
+SELECT DISTINCT cidade
+ORDER BY ALL;</pre>
+            </div>
+            <div class="guide-card">
+              <h4>2. GROUP BY ALL &amp; Alias no HAVING</h4>
+              <p class="muted-small">Agrupe automaticamente por todas as colunas não agregadas e reutilize aliases no <code>HAVING</code>:</p>
+              <pre class="expected-sql-code">FROM professores p
+JOIN disciplinas d ON d.professor_id = p.id
+SELECT p.nome, COUNT(d.id) AS total
+GROUP BY ALL
+HAVING total &gt;= 2;</pre>
+            </div>
+            <div class="guide-card">
+              <h4>3. QUALIFY (filtrar Window Functions sem CTE)</h4>
+              <p class="muted-small">Filtre <code>RANK()</code> ou <code>DENSE_RANK()</code> direto na consulta (quando houver <code>GROUP BY</code>, liste as colunas explicitamente ao usar <code>QUALIFY</code>):</p>
+              <pre class="expected-sql-code">FROM notas
+SELECT aluno_disciplina_id, nota
+QUALIFY RANK() OVER (ORDER BY nota DESC) &lt;= 3;</pre>
+            </div>
+            <div class="guide-card">
+              <h4>4. ANTI JOIN, COUNT_IF &amp; BOOL_AND</h4>
+              <p class="muted-small">Substitua <code>LEFT JOIN ... WHERE IS NULL</code> por <code>ANTI JOIN</code> e agregações condicionais por <code>COUNT_IF</code> / <code>BOOL_AND</code>:</p>
+              <pre class="expected-sql-code">FROM alunos a
+ANTI JOIN alunos_disciplinas ad ON ad.aluno_id = a.id
+SELECT a.id, a.nome;</pre>
+            </div>
+            <div class="guide-card">
+              <h4>5. PIVOT, EXCLUDE &amp; SUMMARIZE</h4>
+              <p class="muted-small">Crie tabelas dinâmicas nativas com <code>PIVOT</code>, remova colunas com <code>SELECT * EXCLUDE (col)</code> e explore tabelas no Modo Livre com <code>SUMMARIZE alunos;</code>.</p>
+              <pre class="expected-sql-code">PIVOT (FROM alunos_disciplinas SELECT status)
+ON status IN ('cursando', 'concluida', 'trancada')
+USING COUNT(*);</pre>
+            </div>
+            <div class="guide-card">
+              <h4>6. Datas &amp; Busca Case-Insensitive</h4>
+              <p class="muted-small">As datas no DuckDB usam o tipo <code>DATE</code>. Use <code>YEAR(data_matricula) = 2025</code>, literais <code>DATE '2020-01-01'</code> e <code>ILIKE '%dados%'</code>.</p>
+            </div>
+          </div>
+        </div>
+
         <div id="guide-tab-dialects" class="guide-panel hidden">
           <p class="guide-intro">
-            Este playground executa <strong>SQLite real</strong> (sem necessidade de servidor externo).
-            Abaixo estão as principais diferenças caso você leve seus estudos para <strong>PostgreSQL</strong> ou <strong>MySQL</strong>:
+            Você pode alternar no topo entre <strong>SQLite</strong> e <strong>DuckDB (Friendly SQL)</strong> (ambos com a mesma base acadêmica).
+            Abaixo estão as principais diferenças entre os motores e <strong>PostgreSQL</strong> / <strong>MySQL</strong>:
           </p>
           <div class="table-scroll">
             <table class="data-table">
               <thead>
                 <tr>
                   <th>Recurso</th>
-                  <th>SQLite (este ambiente)</th>
+                  <th>SQLite</th>
+                  <th>DuckDB (Friendly SQL)</th>
                   <th>PostgreSQL</th>
                   <th>MySQL</th>
                 </tr>
@@ -481,6 +538,7 @@ SELECT * FROM ranking WHERE pos &lt;= 3;</pre>
                 <tr>
                   <td>Extrair ano de data</td>
                   <td><code>strftime('%Y', data)</code></td>
+                  <td><code>YEAR(data)</code> ou <code>strftime(data, '%Y')</code></td>
                   <td><code>EXTRACT(YEAR FROM data::date)</code></td>
                   <td><code>YEAR(data)</code></td>
                 </tr>
@@ -488,29 +546,41 @@ SELECT * FROM ranking WHERE pos &lt;= 3;</pre>
                   <td>Concatenar texto</td>
                   <td><code>a || ' ' || b</code></td>
                   <td><code>a || ' ' || b</code> ou <code>CONCAT()</code></td>
+                  <td><code>a || ' ' || b</code> ou <code>CONCAT()</code></td>
                   <td><code>CONCAT(a, ' ', b)</code></td>
                 </tr>
                 <tr>
                   <td>LIKE (maiús./minús.)</td>
                   <td>Case-insensitive para ASCII</td>
                   <td>Case-sensitive (use <code>ILIKE</code>)</td>
+                  <td>Case-sensitive (use <code>ILIKE</code>)</td>
                   <td>Depende da collation (geralmente insensitive)</td>
                 </tr>
                 <tr>
                   <td>Divisão de inteiros</td>
                   <td><code>5 / 2 = 2</code> (use <code>* 1.0</code>)</td>
+                  <td><code>5 / 2 = 2.5</code> (use <code>//</code> para int)</td>
                   <td><code>5 / 2 = 2</code> (use <code>::numeric</code>)</td>
                   <td><code>5 / 2 = 2.5000</code> (use <code>DIV</code> para int)</td>
                 </tr>
                 <tr>
-                  <td>Chave auto-incremental</td>
-                  <td><code>INTEGER PRIMARY KEY AUTOINCREMENT</code></td>
-                  <td><code>SERIAL</code> / <code>GENERATED ALWAYS AS IDENTITY</code></td>
-                  <td><code>INT AUTO_INCREMENT PRIMARY KEY</code></td>
+                  <td>Agrupar colunas</td>
+                  <td>Listar todas no <code>GROUP BY</code></td>
+                  <td><code>GROUP BY ALL</code></td>
+                  <td>Listar todas no <code>GROUP BY</code></td>
+                  <td>Listar todas no <code>GROUP BY</code></td>
+                </tr>
+                <tr>
+                  <td>Filtrar Window Function</td>
+                  <td>CTE / subquery + <code>WHERE</code></td>
+                  <td><code>QUALIFY</code> direto na query</td>
+                  <td>CTE / subquery + <code>WHERE</code></td>
+                  <td>CTE / subquery + <code>WHERE</code></td>
                 </tr>
                 <tr>
                   <td>Concatenar grupo</td>
                   <td><code>GROUP_CONCAT(col, ', ')</code></td>
+                  <td><code>STRING_AGG(col, ', ')</code></td>
                   <td><code>STRING_AGG(col, ', ')</code></td>
                   <td><code>GROUP_CONCAT(col SEPARATOR ', ')</code></td>
                 </tr>

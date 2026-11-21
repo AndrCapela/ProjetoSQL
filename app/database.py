@@ -1,13 +1,96 @@
-"""Criação, carga inicial e inspeção de esquema do banco SQLite de exemplo."""
+"""Criação, carga inicial e inspeção de esquema dos bancos SQLite e DuckDB."""
 
 from __future__ import annotations
 
+import re
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Any
 
+import duckdb
+
+from app.schemas import DatabaseEngine
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "escola.db"
+DEFAULT_DUCKDB_PATH = PROJECT_ROOT / "data" / "escola.duckdb"
+
+DUCKDB_READONLY_CONFIG: dict[str, str | bool | int] = {
+    "enable_external_access": False,
+    "allow_community_extensions": False,
+    "autoinstall_known_extensions": False,
+    "autoload_known_extensions": False,
+    "lock_configuration": True,
+    "memory_limit": "128MB",
+    "threads": 1,
+    "temp_directory": tempfile.gettempdir(),
+    "max_temp_directory_size": "32MB",
+}
+
+DUCKDB_SCHEMA_SQL = """
+CREATE TABLE professores (
+    id INTEGER PRIMARY KEY,
+    nome VARCHAR NOT NULL,
+    especialidade VARCHAR NOT NULL,
+    email VARCHAR NOT NULL UNIQUE,
+    salario DECIMAL(10, 2) NOT NULL,
+    data_contratacao DATE NOT NULL
+);
+
+CREATE TABLE cursos (
+    id INTEGER PRIMARY KEY,
+    nome VARCHAR NOT NULL UNIQUE,
+    categoria VARCHAR NOT NULL,
+    carga_horaria INTEGER NOT NULL
+);
+
+CREATE TABLE disciplinas (
+    id INTEGER PRIMARY KEY,
+    codigo VARCHAR NOT NULL UNIQUE,
+    nome VARCHAR NOT NULL,
+    carga_horaria INTEGER NOT NULL,
+    curso_id INTEGER NOT NULL,
+    professor_id INTEGER NOT NULL,
+    FOREIGN KEY (curso_id) REFERENCES cursos(id),
+    FOREIGN KEY (professor_id) REFERENCES professores(id)
+);
+
+CREATE TABLE alunos (
+    id INTEGER PRIMARY KEY,
+    nome VARCHAR NOT NULL,
+    idade INTEGER NOT NULL,
+    cidade VARCHAR NOT NULL,
+    email VARCHAR NOT NULL UNIQUE,
+    data_matricula DATE NOT NULL
+);
+
+CREATE TABLE alunos_disciplinas (
+    id INTEGER PRIMARY KEY,
+    aluno_id INTEGER NOT NULL,
+    disciplina_id INTEGER NOT NULL,
+    data_inscricao DATE NOT NULL,
+    status VARCHAR NOT NULL CHECK (status IN ('cursando', 'concluida', 'trancada')),
+    UNIQUE (aluno_id, disciplina_id),
+    FOREIGN KEY (aluno_id) REFERENCES alunos(id),
+    FOREIGN KEY (disciplina_id) REFERENCES disciplinas(id)
+);
+
+CREATE TABLE notas (
+    id INTEGER PRIMARY KEY,
+    aluno_disciplina_id INTEGER NOT NULL,
+    avaliacao VARCHAR NOT NULL,
+    nota DECIMAL(4, 2) NOT NULL CHECK (nota >= 0 AND nota <= 10),
+    data_avaliacao DATE NOT NULL,
+    FOREIGN KEY (aluno_disciplina_id) REFERENCES alunos_disciplinas(id)
+);
+
+CREATE INDEX idx_disciplinas_curso_id ON disciplinas(curso_id);
+CREATE INDEX idx_disciplinas_professor_id ON disciplinas(professor_id);
+CREATE INDEX idx_alunos_disciplinas_aluno_id ON alunos_disciplinas(aluno_id);
+CREATE INDEX idx_alunos_disciplinas_disciplina_id ON alunos_disciplinas(disciplina_id);
+CREATE INDEX idx_notas_aluno_disciplina_id ON notas(aluno_disciplina_id);
+"""
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -500,15 +583,202 @@ def create_and_seed_database(db_path: Path = DEFAULT_DB_PATH, overwrite: bool = 
     return db_path
 
 
-def ensure_database(db_path: Path = DEFAULT_DB_PATH) -> Path:
-    """Garante que o banco exista no caminho esperado."""
-    return create_and_seed_database(db_path=db_path, overwrite=False)
+def connect_duckdb_readonly(db_path: Path = DEFAULT_DUCKDB_PATH) -> duckdb.DuckDBPyConnection:
+    """Abre uma conexão DuckDB somente leitura com configuração sandbox travada."""
+    resolved = Path(db_path).resolve()
+    return duckdb.connect(
+        str(resolved),
+        read_only=True,
+        config=dict(DUCKDB_READONLY_CONFIG),
+    )
 
 
-def get_schema_metadata(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def create_and_seed_duckdb(
+    db_path: Path = DEFAULT_DUCKDB_PATH,
+    overwrite: bool = False,
+) -> Path:
+    """Cria o banco DuckDB com o schema acadêmico e popula os mesmos registros iniciais."""
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if db_path.exists():
+        if not overwrite:
+            return db_path
+        db_path.unlink()
+
+    wal_path = Path(f"{db_path}.wal")
+    if wal_path.exists():
+        wal_path.unlink()
+
+    conn = duckdb.connect(str(db_path.resolve()))
+    try:
+        conn.execute(DUCKDB_SCHEMA_SQL)
+        conn.begin()
+        try:
+            conn.executemany(
+                "INSERT INTO professores (id, nome, especialidade, email, salario, data_contratacao) VALUES (?, ?, ?, ?, ?, ?)",
+                PROFESSORES_SEED,
+            )
+            conn.executemany(
+                "INSERT INTO cursos (id, nome, categoria, carga_horaria) VALUES (?, ?, ?, ?)",
+                CURSOS_SEED,
+            )
+            conn.executemany(
+                "INSERT INTO disciplinas (id, codigo, nome, carga_horaria, curso_id, professor_id) VALUES (?, ?, ?, ?, ?, ?)",
+                DISCIPLINAS_SEED,
+            )
+            conn.executemany(
+                "INSERT INTO alunos (id, nome, idade, cidade, email, data_matricula) VALUES (?, ?, ?, ?, ?, ?)",
+                ALUNOS_SEED,
+            )
+            conn.executemany(
+                "INSERT INTO alunos_disciplinas (id, aluno_id, disciplina_id, data_inscricao, status) VALUES (?, ?, ?, ?, ?)",
+                ALUNOS_DISCIPLINAS_SEED,
+            )
+            conn.executemany(
+                "INSERT INTO notas (id, aluno_disciplina_id, avaliacao, nota, data_avaliacao) VALUES (?, ?, ?, ?, ?)",
+                NOTAS_SEED,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+    return db_path
+
+
+def create_and_seed_all_databases(
+    sqlite_path: Path = DEFAULT_DB_PATH,
+    duckdb_path: Path = DEFAULT_DUCKDB_PATH,
+    overwrite: bool = False,
+) -> tuple[Path, Path]:
+    """Cria e popula as bases SQLite e DuckDB com os mesmos dados."""
+    sqlite_file = create_and_seed_database(db_path=sqlite_path, overwrite=overwrite)
+    duckdb_file = create_and_seed_duckdb(db_path=duckdb_path, overwrite=overwrite)
+    return sqlite_file, duckdb_file
+
+
+def ensure_database(
+    db_path: Path | None = None,
+    engine: DatabaseEngine = "sqlite",
+) -> Path:
+    """Garante que o banco do motor especificado exista no caminho esperado."""
+    if engine == "duckdb":
+        target = Path(db_path) if db_path is not None else DEFAULT_DUCKDB_PATH
+        return create_and_seed_duckdb(db_path=target, overwrite=False)
+    target = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    return create_and_seed_database(db_path=target, overwrite=False)
+
+
+_FK_TEXT_RE = re.compile(
+    r"FOREIGN\s+KEY\s*\(([^)]+)\)\s*REFERENCES\s+([^\s(]+)\s*\(([^)]+)\)",
+    re.IGNORECASE,
+)
+
+
+def _strip_ident_quotes(name: str) -> str:
+    return name.strip().strip('"').strip("'").strip("`")
+
+
+_TABLE_DISPLAY_ORDER = {
+    "professores": 0,
+    "cursos": 1,
+    "disciplinas": 2,
+    "alunos": 3,
+    "alunos_disciplinas": 4,
+    "notas": 5,
+}
+
+
+def get_duckdb_schema_metadata(db_path: Path = DEFAULT_DUCKDB_PATH) -> list[dict[str, Any]]:
+    """Retorna metadados das tabelas, colunas, chaves e contagem de registros do DuckDB."""
+    ensure_database(db_path, engine="duckdb")
+    conn = connect_duckdb_readonly(db_path)
+    try:
+        tables = conn.execute(
+            """
+            SELECT table_name
+            FROM duckdb_tables()
+            WHERE schema_name = 'main' AND NOT internal
+            ORDER BY table_oid
+            """
+        ).fetchall()
+        ordered_tables = sorted(
+            (row[0] for row in tables),
+            key=lambda name: (_TABLE_DISPLAY_ORDER.get(name, 99), name),
+        )
+
+        metadata: list[dict[str, Any]] = []
+        for table_name in ordered_tables:
+            constraint_rows = conn.execute(
+                """
+                SELECT constraint_type, constraint_column_names, constraint_text
+                FROM duckdb_constraints()
+                WHERE schema_name = 'main' AND table_name = ?
+                """,
+                [table_name],
+            ).fetchall()
+
+            pk_cols: set[str] = set()
+            fk_map: dict[str, str] = {}
+            for c_type, c_cols, c_text in constraint_rows:
+                if c_type == "PRIMARY KEY" and c_cols:
+                    pk_cols.update(str(col) for col in c_cols)
+                elif c_type == "FOREIGN KEY" and c_text:
+                    match = _FK_TEXT_RE.search(c_text)
+                    if match:
+                        from_col = _strip_ident_quotes(match.group(1).split(",")[0])
+                        ref_table = _strip_ident_quotes(match.group(2))
+                        ref_col = _strip_ident_quotes(match.group(3).split(",")[0])
+                        fk_map[from_col] = f"{ref_table}.{ref_col}"
+
+            col_rows = conn.execute(
+                """
+                SELECT column_name, data_type, is_nullable
+                FROM duckdb_columns()
+                WHERE schema_name = 'main' AND table_name = ? AND NOT internal
+                ORDER BY column_index
+                """,
+                [table_name],
+            ).fetchall()
+
+            columns = [
+                {
+                    "name": col_name,
+                    "type": data_type or "VARCHAR",
+                    "nullable": bool(is_nullable),
+                    "primary_key": col_name in pk_cols,
+                    "foreign_key": fk_map.get(col_name),
+                }
+                for col_name, data_type, is_nullable in col_rows
+            ]
+
+            row_count = conn.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()[0]
+            metadata.append(
+                {
+                    "name": table_name,
+                    "row_count": row_count,
+                    "columns": columns,
+                }
+            )
+        return metadata
+    finally:
+        conn.close()
+
+
+def get_schema_metadata(
+    db_path: Path | None = None,
+    engine: DatabaseEngine = "sqlite",
+) -> list[dict[str, Any]]:
     """Retorna metadados das tabelas, colunas, chaves e contagem de registros."""
-    ensure_database(db_path)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    if engine == "duckdb":
+        return get_duckdb_schema_metadata(db_path if db_path is not None else DEFAULT_DUCKDB_PATH)
+
+    sqlite_path = db_path if db_path is not None else DEFAULT_DB_PATH
+    ensure_database(sqlite_path, engine="sqlite")
+    conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
     try:
         conn.row_factory = sqlite3.Row
         tables = conn.execute(
@@ -555,5 +825,6 @@ def get_schema_metadata(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]
 
 
 if __name__ == "__main__":
-    path = create_and_seed_database(overwrite=True)
-    print(f"Banco SQLite criado e populado em: {path}")
+    sqlite_file, duckdb_file = create_and_seed_all_databases(overwrite=True)
+    print(f"Banco SQLite criado e populado em: {sqlite_file}")
+    print(f"Banco DuckDB criado e populado em: {duckdb_file}")

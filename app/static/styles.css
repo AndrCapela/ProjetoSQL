@@ -127,6 +127,7 @@ body {
   color: var(--text-muted);
 }
 
+.engine-switch,
 .mode-switch,
 .difficulty-pills {
   display: inline-flex;
@@ -137,6 +138,7 @@ body {
   gap: 2px;
 }
 
+.engine-btn,
 .mode-btn,
 .diff-pill {
   border: none;
@@ -150,15 +152,22 @@ body {
   transition: all 0.15s ease;
 }
 
+.engine-btn:hover,
 .mode-btn:hover,
 .diff-pill:hover {
   color: var(--text);
 }
 
+.engine-btn.active,
 .mode-btn.active,
 .diff-pill.active {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.engine-btn.active[data-engine="duckdb"] {
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 .challenge-picker-wrap {
@@ -262,6 +271,17 @@ body {
   height: 100%;
   border-radius: 999px;
   background: var(--success);
+}
+
+.progress-other-engine {
+  border-top: 1px dashed var(--border);
+  padding-top: 7px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .free-templates-row {
@@ -1171,6 +1191,16 @@ body {
   text-overflow: ellipsis;
 }
 
+.data-table.explain-table td {
+  white-space: pre;
+  font-family: var(--mono);
+  font-size: 12px;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  vertical-align: top;
+}
+
 .data-table tbody tr:hover {
   background: var(--accent-soft);
 }
@@ -1828,6 +1858,7 @@ body {
     display: none;
   }
 
+  .engine-switch,
   .mode-switch,
   .difficulty-pills {
     width: 100%;
@@ -1836,6 +1867,7 @@ body {
     grid-auto-columns: 1fr;
   }
 
+  .engine-btn,
   .mode-btn,
   .diff-pill {
     text-align: center;

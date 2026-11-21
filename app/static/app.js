@@ -5,11 +5,47 @@
   const STORAGE_THEME_KEY = "sql_arena_theme";
   const STORAGE_HISTORY_KEY = "sql_arena_query_history";
   const STORAGE_DRAFTS_KEY = "sql_arena_drafts";
+  const STORAGE_ENGINE_KEY = "sql_arena_engine";
+  const STORAGE_SOLVED_BY_ENGINE_KEY = "sql_arena_solved_by_engine";
+  const STORAGE_HISTORY_BY_ENGINE_KEY = "sql_arena_history_by_engine";
 
   const LEVEL_LABELS = {
     facil: "Fácil",
     medio: "Médio",
     dificil: "Difícil",
+  };
+
+  const ENGINE_META = {
+    sqlite: {
+      label: "SQLite",
+      shortLabel: "SQLite",
+      brandSub: "Base Acadêmica • SQLite Read-Only",
+      placeholder: "Ex: SELECT nome, idade, cidade FROM alunos WHERE idade > 30;",
+      freeDescriptionHtml:
+        "Teste qualquer consulta <code>SELECT</code> ou <code>WITH</code> livremente na base acadêmica SQLite " +
+        "(<code>professores</code>, <code>cursos</code>, <code>disciplinas</code>, <code>alunos</code>, " +
+        "<code>alunos_disciplinas</code> e <code>notas</code>).",
+      expectedSqlLabel: "Query SQL Correta (SQLite)",
+      explainMessage:
+        "Plano de execução SQLite (EXPLAIN QUERY PLAN): veja abaixo se a query usa SCAN ou SEARCH.",
+      chatWelcome:
+        "Olá! Sou o **Tutor SQL**.\nEscreva ou execute uma consulta e me pergunte **por que ela não funcionou**, como corrigir um `JOIN`, `GROUP BY`, ou diferenças do **SQLite**.",
+    },
+    duckdb: {
+      label: "DuckDB (Friendly SQL)",
+      shortLabel: "DuckDB",
+      brandSub: "Base Acadêmica • DuckDB Friendly SQL Read-Only",
+      placeholder: "Ex: FROM alunos SELECT nome, idade, cidade WHERE idade > 30;",
+      freeDescriptionHtml:
+        "Teste consultas em <strong>DuckDB</strong> usando SQL padrão ou <strong>Friendly SQL</strong> " +
+        "(<code>FROM</code>-first, <code>GROUP BY ALL</code>, <code>QUALIFY</code>, <code>PIVOT</code>, " +
+        "<code>ANTI JOIN</code>, <code>SUMMARIZE</code>) na mesma base acadêmica.",
+      expectedSqlLabel: "Query SQL Correta (Friendly SQL / DuckDB)",
+      explainMessage:
+        "Plano de execução DuckDB (EXPLAIN): veja abaixo os operadores físicos da consulta.",
+      chatWelcome:
+        "Olá! Sou o **Tutor SQL**.\nVocê está usando **DuckDB (Friendly SQL)**. Pergunte sobre `FROM`-first, `GROUP BY ALL`, `QUALIFY`, `PIVOT`, `ANTI JOIN` ou qualquer erro SQL!",
+    },
   };
 
   function storageGetJson(key, fallback) {
@@ -29,15 +65,55 @@
     }
   }
 
+  function loadInitialEngine() {
+    try {
+      const saved = localStorage.getItem(STORAGE_ENGINE_KEY);
+      return saved === "duckdb" ? "duckdb" : "sqlite";
+    } catch {
+      return "sqlite";
+    }
+  }
+
+  function loadSolvedByEngine() {
+    const stored = storageGetJson(STORAGE_SOLVED_BY_ENGINE_KEY, null);
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      return {
+        sqlite: new Set(Array.isArray(stored.sqlite) ? stored.sqlite : []),
+        duckdb: new Set(Array.isArray(stored.duckdb) ? stored.duckdb : []),
+      };
+    }
+    const legacy = storageGetJson(STORAGE_SOLVED_KEY, []);
+    return {
+      sqlite: new Set(Array.isArray(legacy) ? legacy : []),
+      duckdb: new Set(),
+    };
+  }
+
+  function loadHistoryByEngine() {
+    const stored = storageGetJson(STORAGE_HISTORY_BY_ENGINE_KEY, null);
+    if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+      return {
+        sqlite: Array.isArray(stored.sqlite) ? stored.sqlite : [],
+        duckdb: Array.isArray(stored.duckdb) ? stored.duckdb : [],
+      };
+    }
+    const legacy = storageGetJson(STORAGE_HISTORY_KEY, []);
+    return {
+      sqlite: Array.isArray(legacy) ? legacy : [],
+      duckdb: [],
+    };
+  }
+
   const state = {
+    engine: loadInitialEngine(),
     mode: "challenge", // "challenge" | "free"
     level: "facil",
     topic: "ALL",
     schema: [],
     challenges: [],
     currentChallenge: null,
-    solvedIds: new Set(storageGetJson(STORAGE_SOLVED_KEY, [])),
-    history: storageGetJson(STORAGE_HISTORY_KEY, []),
+    solvedByEngine: loadSolvedByEngine(),
+    historyByEngine: loadHistoryByEngine(),
     drafts: storageGetJson(STORAGE_DRAFTS_KEY, {}),
     lastExpectedSql: "",
     expectedSqlRevealed: false,
@@ -72,6 +148,7 @@
       columns: [],
       rows: [],
       rowStatuses: null,
+      isExplain: false,
       rowCount: 0,
       executionMs: 0,
       truncated: false,
@@ -96,13 +173,35 @@
       .replace(/'/g, "&#39;");
   }
 
+  function getSolvedSet(engine = state.engine) {
+    if (!state.solvedByEngine[engine]) {
+      state.solvedByEngine[engine] = new Set();
+    }
+    return state.solvedByEngine[engine];
+  }
+
   function saveSolved() {
-    storageSet(STORAGE_SOLVED_KEY, JSON.stringify([...state.solvedIds]));
+    const payload = {
+      sqlite: [...getSolvedSet("sqlite")],
+      duckdb: [...getSolvedSet("duckdb")],
+    };
+    storageSet(STORAGE_SOLVED_BY_ENGINE_KEY, JSON.stringify(payload));
+  }
+
+  function getHistoryList(engine = state.engine) {
+    if (!Array.isArray(state.historyByEngine[engine])) {
+      state.historyByEngine[engine] = [];
+    }
+    return state.historyByEngine[engine];
+  }
+
+  function getLegacyDraftKey() {
+    if (state.mode === "free") return "__free__";
+    return state.currentChallenge ? state.currentChallenge.id : "__none__";
   }
 
   function getActiveDraftKey() {
-    if (state.mode === "free") return "__free__";
-    return state.currentChallenge ? state.currentChallenge.id : "__none__";
+    return `${state.engine}:${getLegacyDraftKey()}`;
   }
 
   function saveCurrentDraft() {
@@ -113,7 +212,11 @@
 
   function restoreCurrentDraft() {
     const key = getActiveDraftKey();
-    $("sql-input").value = state.drafts[key] || "";
+    let value = state.drafts[key];
+    if (value === undefined && state.engine === "sqlite") {
+      value = state.drafts[getLegacyDraftKey()];
+    }
+    $("sql-input").value = value || "";
     hideAutocomplete();
     updateLineNumbers();
   }
@@ -158,18 +261,71 @@
     return res.json();
   }
 
-  async function loadInitialData() {
+  function applyEngineUi() {
+    const meta = ENGINE_META[state.engine] || ENGINE_META.sqlite;
+    document.querySelectorAll(".engine-btn").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.engine === state.engine);
+    });
+    if ($("brand-sub")) $("brand-sub").textContent = meta.brandSub;
+    if ($("sql-input")) $("sql-input").placeholder = meta.placeholder;
+    if ($("free-mode-description")) $("free-mode-description").innerHTML = meta.freeDescriptionHtml;
+    if ($("expected-sql-label")) $("expected-sql-label").textContent = meta.expectedSqlLabel;
+
+    const templates = FREE_SQL_TEMPLATES_BY_ENGINE[state.engine] || FREE_SQL_TEMPLATES_BY_ENGINE.sqlite;
+    document.querySelectorAll(".free-template-btn").forEach((btn) => {
+      const tpl = templates[btn.dataset.template];
+      if (tpl && tpl.label) {
+        btn.textContent = tpl.label;
+      }
+    });
+
+    if (!state.chat.messages.length) {
+      renderChatMessages();
+    }
+    updateChatContextLabel();
+  }
+
+  async function setEngine(nextEngine) {
+    if (nextEngine !== "sqlite" && nextEngine !== "duckdb") return;
+    if (nextEngine === state.engine) return;
+
+    saveCurrentDraft();
+    state.engine = nextEngine;
+    storageSet(STORAGE_ENGINE_KEY, nextEngine);
+    applyEngineUi();
+    resetResultsView();
+    renderHistoryPopover();
+
+    const prevChallengeId = state.currentChallenge ? state.currentChallenge.id : null;
+    await loadInitialData(prevChallengeId);
+    restoreCurrentDraft();
+    updateChatContextLabel();
+
+    if (!$("data-browser-backdrop").classList.contains("hidden")) {
+      renderBrowserTabs();
+      loadBrowserData();
+    }
+    if (!$("der-backdrop").classList.contains("hidden")) {
+      renderDerDiagram();
+      requestAnimationFrame(drawDerConnectors);
+    }
+  }
+
+  async function loadInitialData(preferredChallengeId = null) {
+    const engineParam = encodeURIComponent(state.engine);
     const [schema, challenges] = await Promise.all([
-      fetchJson("/api/schema"),
-      fetchJson("/api/challenges"),
+      fetchJson(`/api/schema?engine=${engineParam}`),
+      fetchJson(`/api/challenges?engine=${engineParam}`),
     ]);
     state.schema = schema;
     state.challenges = challenges;
+    if (preferredChallengeId) {
+      state.currentChallenge = challenges.find((c) => c.id === preferredChallengeId) || null;
+    }
     renderSchemaSidebar();
     renderChallengeControls();
     updateProgressPill();
     updateSqlHighlight();
-    updateProgressPill();
   }
 
   // ==================== SCHEMA SIDEBAR ====================
@@ -276,9 +432,10 @@
     renderTopicFilter();
     const list = getFilteredChallenges();
     const select = $("challenge-select");
+    const solvedSet = getSolvedSet();
     select.innerHTML = list
       .map((c, idx) => {
-        const solvedMark = state.solvedIds.has(c.id) ? "✓ " : "";
+        const solvedMark = solvedSet.has(c.id) ? "✓ " : "";
         return `<option value="${escapeHtml(c.id)}">${solvedMark}${idx + 1}. ${escapeHtml(c.titulo)}</option>`;
       })
       .join("");
@@ -289,7 +446,6 @@
       select.value = state.currentChallenge.id;
       renderCurrentChallenge();
       updateChallengeNavButtons();
-      renderCurrentChallenge();
     }
   }
 
@@ -388,6 +544,7 @@
     $("user-diff-chip").classList.add("hidden");
     $("expected-diff-chip").classList.add("hidden");
     $("expected-sql-code").textContent = "";
+    state.tables.user.isExplain = false;
     state.lastExpectedSql = "";
     state.lastExecution = { error: null, feedback: null, resultSummary: null };
     setExpectedSqlVisible(false);
@@ -424,7 +581,7 @@
     $("challenge-description").textContent = ch.enunciado;
     $("challenge-hint-box").textContent = `Dica: ${ch.dica}`;
 
-    const isSolved = state.solvedIds.has(ch.id);
+    const isSolved = getSolvedSet().has(ch.id);
     $("challenge-solved-badge").classList.toggle("hidden", !isSolved);
 
     $("challenge-topics").innerHTML = ch.topicos
@@ -434,22 +591,29 @@
 
   function updateProgressPill() {
     const pill = $("progress-pill");
-    pill.textContent = `${state.solvedIds.size} / ${state.challenges.length} resolvidos`;
+    const activeSolved = getSolvedSet();
+    const otherEngine = state.engine === "duckdb" ? "sqlite" : "duckdb";
+    const otherSolved = getSolvedSet(otherEngine);
+    const activeLabel = ENGINE_META[state.engine].shortLabel;
+    const otherLabel = ENGINE_META[otherEngine].shortLabel;
+
+    pill.textContent = `${activeSolved.size} / ${state.challenges.length} resolvidos • ${activeLabel}`;
 
     const levels = ["facil", "medio", "dificil"];
     const stats = levels.map((lvl) => {
       const items = state.challenges.filter((c) => c.nivel === lvl);
-      const solved = items.filter((c) => state.solvedIds.has(c.id)).length;
+      const solved = items.filter((c) => activeSolved.has(c.id)).length;
       return { lvl, label: LEVEL_LABELS[lvl], solved, total: items.length };
     });
 
     pill.title =
+      `${activeLabel}: ` +
       stats.map((s) => `${s.label}: ${s.solved}/${s.total}`).join(" • ") +
-      " (clique para detalhar)";
+      ` | ${otherLabel}: ${otherSolved.size}/${state.challenges.length} (clique para detalhar)`;
 
     const pop = $("progress-popover");
-    pop.innerHTML = stats
-      .map((s) => {
+    pop.innerHTML = [
+      ...stats.map((s) => {
         const pct = s.total ? Math.round((s.solved / s.total) * 100) : 0;
         return `
           <button type="button" class="progress-level-btn" data-jump-level="${s.lvl}">
@@ -462,8 +626,9 @@
             </div>
           </button>
         `;
-      })
-      .join("");
+      }),
+      `<div class="progress-other-engine"><span>Progresso em ${escapeHtml(otherLabel)}:</span><strong>${otherSolved.size} / ${state.challenges.length}</strong></div>`,
+    ].join("");
 
     pop.querySelectorAll("[data-jump-level]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -525,11 +690,12 @@
 
     let formatted = masked.replace(/\s+/g, " ").trim();
     const keywords = [
-      "SELECT", "DISTINCT", "FROM", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "CROSS JOIN",
-      "JOIN", "ON", "WHERE", "AND", "OR", "GROUP BY", "HAVING", "ORDER BY", "LIMIT",
-      "OFFSET", "WITH", "AS", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION ALL", "UNION",
-      "OVER", "PARTITION BY", "IS NOT NULL", "IS NULL", "NOT EXISTS", "EXISTS",
-      "BETWEEN", "LIKE", "IN", "ASC", "DESC", "COUNT", "AVG", "SUM", "MIN", "MAX", "ROUND",
+      "SELECT", "DISTINCT", "FROM", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "ANTI JOIN", "SEMI JOIN", "CROSS JOIN",
+      "JOIN", "ON", "USING", "WHERE", "AND", "OR", "GROUP BY ALL", "GROUP BY", "HAVING", "QUALIFY",
+      "ORDER BY ALL", "ORDER BY", "LIMIT", "OFFSET", "WITH", "AS", "CASE", "WHEN", "THEN", "ELSE", "END",
+      "UNION ALL", "UNION", "OVER", "PARTITION BY", "WINDOW", "IS NOT NULL", "IS NULL", "NOT EXISTS", "EXISTS",
+      "BETWEEN", "ILIKE", "LIKE", "IN", "ASC", "DESC", "PIVOT", "UNPIVOT", "SUMMARIZE", "DESCRIBE", "EXCLUDE",
+      "COUNT_IF", "BOOL_AND", "BOOL_OR", "COUNT", "AVG", "SUM", "MIN", "MAX", "ROUND",
     ];
     keywords.forEach((kw) => {
       const re = new RegExp(`\\b${kw.replace(/ /g, "\\s+")}\\b`, "gi");
@@ -537,8 +703,9 @@
     });
 
     const newlineClauses = [
-      "FROM", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "CROSS JOIN", "JOIN",
-      "WHERE", "GROUP BY", "HAVING", "ORDER BY", "LIMIT", "UNION ALL", "UNION",
+      "FROM", "INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "ANTI JOIN", "SEMI JOIN", "CROSS JOIN", "JOIN",
+      "SELECT", "WHERE", "GROUP BY ALL", "GROUP BY", "HAVING", "QUALIFY", "WINDOW",
+      "ORDER BY ALL", "ORDER BY", "LIMIT", "UNION ALL", "UNION",
     ];
     newlineClauses.forEach((clause) => {
       const re = new RegExp(`\\s+(${clause.replace(/ /g, "\\s+")})\\b`, "g");
@@ -559,33 +726,70 @@
     return formatted;
   }
 
-  const FREE_SQL_TEMPLATES = {
-    top_notas:
-      "SELECT\n    a.nome AS aluno,\n    d.nome AS disciplina,\n    n.avaliacao,\n    n.nota\nFROM notas n\nINNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nORDER BY n.nota DESC, a.nome ASC\nLIMIT 15;",
-    join_completo:
-      "SELECT\n    a.nome AS aluno,\n    c.nome AS curso,\n    d.nome AS disciplina,\n    p.nome AS professor,\n    ad.status\nFROM alunos_disciplinas ad\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nINNER JOIN cursos c ON c.id = d.curso_id\nINNER JOIN professores p ON p.id = d.professor_id\nORDER BY a.nome ASC, d.nome ASC;",
-    media_disciplina:
-      "SELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nFROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nGROUP BY d.id, d.codigo, d.nome\nORDER BY media_nota DESC;",
-    cte_ranking:
-      "WITH medias AS (\n    SELECT\n        a.nome,\n        ROUND(AVG(n.nota), 2) AS media_geral,\n        COUNT(n.id) AS qtd_notas\n    FROM alunos a\n    INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n    INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n    GROUP BY a.id, a.nome\n)\nSELECT\n    nome,\n    qtd_notas,\n    media_geral,\n    RANK() OVER (ORDER BY media_geral DESC) AS ranking\nFROM medias\nORDER BY ranking ASC, nome ASC\nLIMIT 10;",
+  const FREE_SQL_TEMPLATES_BY_ENGINE = {
+    sqlite: {
+      top_notas: {
+        label: "Top notas",
+        sql:
+          "SELECT\n    a.nome AS aluno,\n    d.nome AS disciplina,\n    n.avaliacao,\n    n.nota\nFROM notas n\nINNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nORDER BY n.nota DESC, a.nome ASC\nLIMIT 15;",
+      },
+      join_completo: {
+        label: "JOIN aluno × disciplina",
+        sql:
+          "SELECT\n    a.nome AS aluno,\n    c.nome AS curso,\n    d.nome AS disciplina,\n    p.nome AS professor,\n    ad.status\nFROM alunos_disciplinas ad\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nINNER JOIN cursos c ON c.id = d.curso_id\nINNER JOIN professores p ON p.id = d.professor_id\nORDER BY a.nome ASC, d.nome ASC;",
+      },
+      media_disciplina: {
+        label: "Média por disciplina",
+        sql:
+          "SELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nFROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nGROUP BY d.id, d.codigo, d.nome\nORDER BY media_nota DESC;",
+      },
+      cte_ranking: {
+        label: "CTE + RANK()",
+        sql:
+          "WITH medias AS (\n    SELECT\n        a.nome,\n        ROUND(AVG(n.nota), 2) AS media_geral,\n        COUNT(n.id) AS qtd_notas\n    FROM alunos a\n    INNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\n    INNER JOIN notas n ON n.aluno_disciplina_id = ad.id\n    GROUP BY a.id, a.nome\n)\nSELECT\n    nome,\n    qtd_notas,\n    media_geral,\n    RANK() OVER (ORDER BY media_geral DESC) AS ranking\nFROM medias\nORDER BY ranking ASC, nome ASC\nLIMIT 10;",
+      },
+    },
+    duckdb: {
+      top_notas: {
+        label: "Top notas (FROM-first)",
+        sql:
+          "FROM notas n\nINNER JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id\nINNER JOIN alunos a ON a.id = ad.aluno_id\nINNER JOIN disciplinas d ON d.id = ad.disciplina_id\nSELECT\n    a.nome AS aluno,\n    d.nome AS disciplina,\n    n.avaliacao,\n    n.nota\nORDER BY n.nota DESC, a.nome ASC\nLIMIT 15;",
+      },
+      join_completo: {
+        label: "JOIN + GROUP BY ALL",
+        sql:
+          "FROM disciplinas d\nLEFT JOIN alunos_disciplinas ad ON ad.disciplina_id = d.id\nLEFT JOIN notas n ON n.aluno_disciplina_id = ad.id\nSELECT\n    d.codigo,\n    d.nome AS disciplina,\n    COUNT(n.id) AS total_notas,\n    ROUND(AVG(n.nota), 2) AS media_nota\nGROUP BY ALL\nORDER BY media_nota DESC;",
+      },
+      media_disciplina: {
+        label: "QUALIFY (sem CTE)",
+        sql:
+          "FROM alunos a\nINNER JOIN alunos_disciplinas ad ON ad.aluno_id = a.id\nINNER JOIN notas n ON n.aluno_disciplina_id = ad.id\nSELECT\n    a.nome,\n    COUNT(n.id) AS qtd_notas,\n    ROUND(AVG(n.nota), 2) AS media_geral,\n    RANK() OVER (ORDER BY AVG(n.nota) DESC) AS ranking\nGROUP BY a.id, a.nome\nQUALIFY ranking <= 10\nORDER BY ranking ASC, a.nome ASC;",
+      },
+      cte_ranking: {
+        label: "SUMMARIZE tabela",
+        sql: "SUMMARIZE notas;",
+      },
+    },
   };
 
   const SQL_KEYWORDS = new Set([
-    "SELECT", "DISTINCT", "FROM", "INNER", "LEFT", "RIGHT", "CROSS", "JOIN", "ON",
-    "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "BETWEEN", "LIKE", "EXISTS",
-    "GROUP", "BY", "HAVING", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET", "AS",
-    "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION", "ALL",
+    "SELECT", "DISTINCT", "FROM", "INNER", "LEFT", "RIGHT", "ANTI", "SEMI", "CROSS", "JOIN", "ON", "USING",
+    "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "BETWEEN", "LIKE", "ILIKE", "EXISTS",
+    "GROUP", "BY", "ALL", "HAVING", "QUALIFY", "WINDOW", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET", "AS",
+    "WITH", "RECURSIVE", "CASE", "WHEN", "THEN", "ELSE", "END", "UNION",
     "OVER", "PARTITION", "FILTER", "GLOB", "ESCAPE", "CAST", "EXPLAIN", "QUERY", "PLAN",
+    "PIVOT", "UNPIVOT", "EXCLUDE", "REPLACE", "DESCRIBE", "SHOW", "SUMMARIZE", "DATE", "VALUES",
   ]);
 
   const SQL_FUNCTIONS = new Set([
-    "COUNT", "AVG", "SUM", "MIN", "MAX", "ROUND", "RANK", "DENSE_RANK", "ROW_NUMBER",
-    "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE", "STRFTIME", "DATE", "DATETIME",
-    "COALESCE", "IFNULL", "NULLIF", "LOWER", "UPPER", "LENGTH", "SUBSTR",
-    "TRIM", "LTRIM", "RTRIM", "REPLACE", "GROUP_CONCAT", "ABS", "TYPEOF", "PRINTF",
+    "COUNT", "COUNT_IF", "BOOL_AND", "BOOL_OR", "AVG", "SUM", "MIN", "MAX", "ROUND",
+    "RANK", "DENSE_RANK", "ROW_NUMBER", "LAG", "LEAD", "FIRST_VALUE", "LAST_VALUE",
+    "STRFTIME", "YEAR", "MONTH", "DAY", "DATE", "DATETIME", "STRING_AGG", "LIST", "ARRAY_AGG",
+    "COALESCE", "IFNULL", "NULLIF", "LOWER", "UPPER", "LENGTH", "SUBSTR", "COLUMNS",
+    "TRIM", "LTRIM", "RTRIM", "REPLACE", "GROUP_CONCAT", "ABS", "TYPEOF", "PRINTF", "MEDIAN",
   ]);
 
-  const AUTOCOMPLETE_SNIPPETS = [
+  const BASE_AUTOCOMPLETE_SNIPPETS = [
     { label: "SELECT", insert: "SELECT ", kind: "SQL" },
     { label: "DISTINCT", insert: "DISTINCT ", kind: "SQL" },
     { label: "FROM", insert: "FROM ", kind: "SQL" },
@@ -610,9 +814,35 @@
     { label: "ROUND(, 2)", insert: "ROUND(", kind: "Função" },
     { label: "RANK() OVER ()", insert: "RANK() OVER (", kind: "Função" },
     { label: "DENSE_RANK() OVER ()", insert: "DENSE_RANK() OVER (", kind: "Função" },
-    { label: "strftime('%Y', )", insert: "strftime('%Y', ", kind: "Função" },
     { label: "COALESCE()", insert: "COALESCE(", kind: "Função" },
   ];
+
+  const SQLITE_EXTRA_SNIPPETS = [
+    { label: "strftime('%Y', )", insert: "strftime('%Y', ", kind: "SQLite" },
+    { label: "GROUP_CONCAT()", insert: "GROUP_CONCAT(", kind: "SQLite" },
+  ];
+
+  const DUCKDB_EXTRA_SNIPPETS = [
+    { label: "GROUP BY ALL", insert: "GROUP BY ALL", kind: "Friendly" },
+    { label: "ORDER BY ALL", insert: "ORDER BY ALL", kind: "Friendly" },
+    { label: "QUALIFY", insert: "QUALIFY ", kind: "Friendly" },
+    { label: "ANTI JOIN", insert: "ANTI JOIN ", kind: "Friendly" },
+    { label: "PIVOT", insert: "PIVOT ", kind: "Friendly" },
+    { label: "SUMMARIZE", insert: "SUMMARIZE ", kind: "Friendly" },
+    { label: "EXCLUDE ()", insert: "EXCLUDE (", kind: "Friendly" },
+    { label: "WINDOW w AS ()", insert: "WINDOW w AS (", kind: "Friendly" },
+    { label: "COUNT_IF()", insert: "COUNT_IF(", kind: "DuckDB" },
+    { label: "BOOL_AND()", insert: "BOOL_AND(", kind: "DuckDB" },
+    { label: "YEAR()", insert: "YEAR(", kind: "DuckDB" },
+    { label: "ILIKE", insert: "ILIKE ", kind: "DuckDB" },
+  ];
+
+  function getAutocompleteSnippets() {
+    if (state.engine === "duckdb") {
+      return [...BASE_AUTOCOMPLETE_SNIPPETS, ...DUCKDB_EXTRA_SNIPPETS];
+    }
+    return [...BASE_AUTOCOMPLETE_SNIPPETS, ...SQLITE_EXTRA_SNIPPETS];
+  }
 
   const acState = {
     open: false,
@@ -887,7 +1117,7 @@
       });
     });
 
-    AUTOCOMPLETE_SNIPPETS.forEach((s) => {
+    getAutocompleteSnippets().forEach((s) => {
       if (!seen.has(`k:${s.label}`)) {
         seen.add(`k:${s.label}`);
         pool.push(s);
@@ -1068,6 +1298,7 @@
       saveQueryHistory(sql);
       const payload = {
         sql,
+        engine: state.engine,
         challenge_id: state.mode === "challenge" && state.currentChallenge
           ? state.currentChallenge.id
           : null,
@@ -1101,7 +1332,7 @@
       const data = await fetchJson("/api/explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sql }),
+        body: JSON.stringify({ sql, engine: state.engine }),
       });
 
       $("empty-results-state").classList.add("hidden");
@@ -1132,11 +1363,11 @@
           resultSummary: summarizeResultForTutor(data.result),
         };
         $("user-error-box").classList.add("hidden");
-        hydrateResultTable("user", data.result, null);
+        hydrateResultTable("user", data.result, null, true);
         showFeedback(
           "success",
           "ℹ",
-          "Plano de execução SQLite (EXPLAIN QUERY PLAN): veja abaixo se a query usa SCAN ou SEARCH."
+          (ENGINE_META[state.engine] || ENGINE_META.sqlite).explainMessage
         );
       }
     } catch (err) {
@@ -1149,18 +1380,26 @@
   function saveQueryHistory(sql) {
     const normalized = sql.trim();
     if (!normalized) return;
-    state.history = [normalized, ...state.history.filter((q) => q !== normalized)].slice(0, 15);
-    storageSet(STORAGE_HISTORY_KEY, JSON.stringify(state.history));
+    const current = getHistoryList();
+    state.historyByEngine[state.engine] = [
+      normalized,
+      ...current.filter((q) => q !== normalized),
+    ].slice(0, 15);
+    storageSet(
+      STORAGE_HISTORY_BY_ENGINE_KEY,
+      JSON.stringify(state.historyByEngine)
+    );
     renderHistoryPopover();
   }
 
   function renderHistoryPopover() {
     const pop = $("history-popover");
-    if (!state.history.length) {
-      pop.innerHTML = `<span class="muted-small history-empty">Nenhuma consulta executada ainda.</span>`;
+    const items = getHistoryList();
+    if (!items.length) {
+      pop.innerHTML = `<span class="muted-small history-empty">Nenhuma consulta executada ainda (${escapeHtml(ENGINE_META[state.engine].shortLabel)}).</span>`;
       return;
     }
-    pop.innerHTML = state.history
+    pop.innerHTML = items
       .map(
         (sql, idx) =>
           `<button class="history-item" data-idx="${idx}" title="${escapeHtml(sql)}">${escapeHtml(sql)}</button>`
@@ -1169,7 +1408,7 @@
 
     pop.querySelectorAll(".history-item").forEach((item) => {
       item.addEventListener("click", () => {
-        $("sql-input").value = state.history[Number(item.dataset.idx)];
+        $("sql-input").value = items[Number(item.dataset.idx)];
         updateLineNumbers();
         saveCurrentDraft();
         pop.classList.add("hidden");
@@ -1268,12 +1507,11 @@
           nextBtn.classList.add("hidden");
         }
         if (data.challenge_id) {
-          state.solvedIds.add(data.challenge_id);
+          getSolvedSet(data.engine || state.engine).add(data.challenge_id);
           saveSolved();
           updateProgressPill();
           renderChallengeControls();
-    updateProgressPill();
-    updateSqlHighlight();
+          updateSqlHighlight();
         }
       } else if (data.user_error) {
         showFeedback("error", "✕", data.feedback);
@@ -1328,11 +1566,12 @@
     }
   }
 
-  function hydrateResultTable(key, result, rowStatuses = null) {
+  function hydrateResultTable(key, result, rowStatuses = null, isExplain = false) {
     const tState = state.tables[key];
     tState.columns = result.columns || [];
     tState.rows = result.rows || [];
     tState.rowStatuses = rowStatuses;
+    tState.isExplain = Boolean(isExplain);
     tState.rowCount = result.row_count ?? tState.rows.length;
     tState.executionMs = result.execution_ms ?? 0;
     tState.truncated = Boolean(result.truncated);
@@ -1433,7 +1672,8 @@
       pageItems.map((i) => i.cells),
       tState.sortIndex,
       tState.sortDir,
-      pageItems.map((i) => i.status)
+      pageItems.map((i) => i.status),
+      tState.isExplain
     );
 
     wrap.querySelectorAll("th[data-col-idx]").forEach((th) => {
@@ -1473,7 +1713,8 @@
     return String(a).localeCompare(String(b), "pt-BR", { numeric: true });
   }
 
-  function buildTableHtml(columns, rows, sortTarget, sortDir, rowStatuses = null) {
+  function buildTableHtml(columns, rows, sortTarget, sortDir, rowStatuses = null, isExplain = false) {
+    const tableClass = isExplain ? "data-table explain-table" : "data-table";
     const thead = columns
       .map((col, idx) => {
         const isSorted = sortTarget === idx || sortTarget === col;
@@ -1484,7 +1725,7 @@
 
     if (!rows.length) {
       return `
-        <table class="data-table">
+        <table class="${tableClass}">
           <thead><tr>${thead}</tr></thead>
         </table>
         <p class="empty-table-msg">Nenhum registro encontrado.</p>
@@ -1516,7 +1757,7 @@
       .join("");
 
     return `
-      <table class="data-table">
+      <table class="${tableClass}">
         <thead><tr>${thead}</tr></thead>
         <tbody>${tbody}</tbody>
       </table>
@@ -1595,6 +1836,7 @@
   async function loadBrowserData() {
     const b = state.browser;
     const params = new URLSearchParams({
+      engine: state.engine,
       page: String(b.page),
       page_size: String(b.pageSize),
       search: b.search,
@@ -1845,7 +2087,17 @@
   }
 
   // ==================== GUIA RÁPIDO ====================
+  function setActiveGuideTab(target) {
+    document.querySelectorAll("[data-guide-tab]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.guideTab === target);
+    });
+    $("guide-tab-cheat").classList.toggle("hidden", target !== "cheat");
+    $("guide-tab-friendly").classList.toggle("hidden", target !== "friendly");
+    $("guide-tab-dialects").classList.toggle("hidden", target !== "dialects");
+  }
+
   function openGuideModal() {
+    setActiveGuideTab(state.engine === "duckdb" ? "friendly" : "cheat");
     $("guide-backdrop").classList.remove("hidden");
   }
 
@@ -1925,11 +2177,7 @@
     });
     document.querySelectorAll("[data-guide-tab]").forEach((tabBtn) => {
       tabBtn.addEventListener("click", () => {
-        document.querySelectorAll("[data-guide-tab]").forEach((b) => b.classList.remove("active"));
-        tabBtn.classList.add("active");
-        const target = tabBtn.dataset.guideTab;
-        $("guide-tab-cheat").classList.toggle("hidden", target !== "cheat");
-        $("guide-tab-dialects").classList.toggle("hidden", target !== "dialects");
+        setActiveGuideTab(tabBtn.dataset.guideTab);
       });
     });
 
@@ -2071,6 +2319,14 @@
       lists.forEach((el) => el.classList.toggle("collapsed", anyExpanded));
     });
 
+    document.querySelectorAll(".engine-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setEngine(btn.dataset.engine).catch((err) => {
+          showFeedback("error", "!", `Erro ao alternar base de dados: ${err.message}`);
+        });
+      });
+    });
+
     $("mode-challenge-btn").addEventListener("click", () => setMode("challenge"));
     $("mode-free-btn").addEventListener("click", () => setMode("free"));
 
@@ -2116,7 +2372,10 @@
 
     document.querySelectorAll(".free-template-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
-        const sql = FREE_SQL_TEMPLATES[btn.dataset.template];
+        const templates =
+          FREE_SQL_TEMPLATES_BY_ENGINE[state.engine] || FREE_SQL_TEMPLATES_BY_ENGINE.sqlite;
+        const tpl = templates[btn.dataset.template];
+        const sql = tpl ? tpl.sql : null;
         if (!sql) return;
         $("sql-input").value = sql;
         updateLineNumbers();
@@ -2133,14 +2392,15 @@
     });
 
     $("reset-progress-btn").addEventListener("click", () => {
-      if (!state.solvedIds.size) return;
-      if (!window.confirm("Deseja zerar todos os exercícios marcados como resolvidos?")) return;
-      state.solvedIds.clear();
+      const activeSolved = getSolvedSet();
+      if (!activeSolved.size) return;
+      const engineLabel = (ENGINE_META[state.engine] || ENGINE_META.sqlite).label;
+      if (!window.confirm(`Deseja zerar os exercícios resolvidos em ${engineLabel}?`)) return;
+      activeSolved.clear();
       saveSolved();
       updateProgressPill();
       renderChallengeControls();
-    updateProgressPill();
-    updateSqlHighlight();
+      updateSqlHighlight();
     });
 
     $("random-challenge-btn").addEventListener("click", () => {
@@ -2269,7 +2529,7 @@
   function updateChatContextLabel() {
     const label = $("chat-context-label");
     if (!label) return;
-    const parts = [];
+    const parts = [(ENGINE_META[state.engine] || ENGINE_META.sqlite).shortLabel];
     if (state.mode === "challenge" && state.currentChallenge) {
       parts.push(state.currentChallenge.titulo);
     } else {
@@ -2285,11 +2545,10 @@
     if (!container) return;
 
     if (!state.chat.messages.length) {
+      const welcome = (ENGINE_META[state.engine] || ENGINE_META.sqlite).chatWelcome;
       container.innerHTML = `
         <div class="chat-msg model">
-          ${formatChatMarkdown(
-            "Olá! Sou o **Tutor SQL**.\nEscreva ou execute uma consulta e me pergunte **por que ela não funcionou**, como corrigir um `JOIN`, `GROUP BY`, ou diferenças do **SQLite**."
-          )}
+          ${formatChatMarkdown(welcome)}
         </div>
       `;
       return;
@@ -2359,6 +2618,7 @@
     const payload = {
       message,
       history,
+      engine: state.engine,
       sql: includeCtx ? $("sql-input").value : null,
       challenge_id:
         includeCtx && state.mode === "challenge" && state.currentChallenge
@@ -2439,6 +2699,7 @@
     initPaneControls();
     initResizers();
     initChat();
+    applyEngineUi();
     loadInitialData().catch((err) => {
       showFeedback("error", "!", `Erro ao inicializar aplicação: ${err.message}`);
     });

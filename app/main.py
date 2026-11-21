@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 
+import duckdb
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
@@ -19,11 +20,18 @@ from fastapi.staticfiles import StaticFiles
 
 from app.challenges import Challenge, get_challenge, list_challenges
 from app.comparator import compare_results
-from app.database import DEFAULT_DB_PATH, ensure_database, get_schema_metadata
+from app.database import (
+    DEFAULT_DB_PATH,
+    DEFAULT_DUCKDB_PATH,
+    connect_duckdb_readonly,
+    ensure_database,
+    get_schema_metadata,
+)
 from app.schemas import (
     ChallengeSummary,
     ChatPayload,
     ChatResponse,
+    DatabaseEngine,
     DifficultyLevel,
     ExecuteQueryResponse,
     ExpectedAnswer,
@@ -34,9 +42,10 @@ from app.schemas import (
 from app.sql_executor import (
     SQLExecutionResult,
     SQLValidationError,
+    _sanitize_cell,
     execute_readonly_sql,
     explain_readonly_sql,
-    translate_sqlite_error,
+    translate_sql_error,
 )
 from app.tutor import (
     TutorConfigError,
@@ -150,27 +159,39 @@ def _to_table_result(res: SQLExecutionResult) -> TableResult:
     )
 
 
-def _to_challenge_summary(ch: Challenge) -> ChallengeSummary:
+def _to_challenge_summary(
+    ch: Challenge,
+    engine: DatabaseEngine = "sqlite",
+) -> ChallengeSummary:
     return ChallengeSummary(
         id=ch.id,
         nivel=ch.nivel,
-        titulo=ch.titulo,
-        enunciado=ch.enunciado,
-        dica=ch.dica,
+        titulo=ch.get_title(engine),
+        enunciado=ch.get_description(engine),
+        dica=ch.get_hint(engine),
         ordem_importa=ch.ordem_importa,
-        topicos=list(ch.topicos),
+        topicos=list(ch.get_topics(engine)),
     )
 
 
 def create_app(
     db_path: Path = DEFAULT_DB_PATH,
+    duckdb_path: Path | None = None,
     rate_limit_per_minute: int | None = None,
     chat_rate_limit_per_minute: int | None = None,
     chat_daily_limit_per_user: int | None = None,
 ) -> FastAPI:
-    """Factory da aplicação FastAPI com caminho de banco e rate limit configuráveis."""
+    """Factory da aplicação FastAPI com caminhos de banco e rate limit configuráveis."""
     app_env = os.getenv("APP_ENV", "development").strip().lower()
     is_prod = app_env == "production"
+
+    sqlite_db_path = Path(db_path)
+    if duckdb_path is not None:
+        resolved_duckdb_path = Path(duckdb_path)
+    elif sqlite_db_path == DEFAULT_DB_PATH:
+        resolved_duckdb_path = DEFAULT_DUCKDB_PATH
+    else:
+        resolved_duckdb_path = sqlite_db_path.with_suffix(".duckdb")
 
     limit = (
         rate_limit_per_minute
@@ -212,31 +233,44 @@ def create_app(
         chat_limiter.check(ip)
         chat_daily_limiter.check(ip)
 
-    def get_cached_schema() -> list[dict[str, Any]]:
-        cached = application.state.schema_cache
+    def get_engine_db_path(engine: DatabaseEngine) -> Path:
+        if engine == "duckdb":
+            return Path(application.state.duckdb_path)
+        return Path(application.state.db_path)
+
+    def get_cached_schema(engine: DatabaseEngine = "sqlite") -> list[dict[str, Any]]:
+        cached = application.state.schema_cache.get(engine)
         if cached is not None:
             return cached
         with schema_lock:
-            if application.state.schema_cache is None:
-                application.state.schema_cache = get_schema_metadata(application.state.db_path)
-            return application.state.schema_cache
+            cached = application.state.schema_cache.get(engine)
+            if cached is None:
+                cached = get_schema_metadata(
+                    db_path=get_engine_db_path(engine),
+                    engine=engine,
+                )
+                application.state.schema_cache[engine] = cached
+            return cached
 
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI):
-        ensure_database(app_instance.state.db_path)
-        get_cached_schema()
+        ensure_database(app_instance.state.db_path, engine="sqlite")
+        ensure_database(app_instance.state.duckdb_path, engine="duckdb")
+        get_cached_schema("sqlite")
+        get_cached_schema("duckdb")
         yield
 
     application = FastAPI(
         title="SQL Arena — Treinamento Interativo de SQL",
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
         docs_url=None if is_prod else "/docs",
         redoc_url=None if is_prod else "/redoc",
         openapi_url=None if is_prod else "/openapi.json",
     )
-    application.state.db_path = Path(db_path)
-    application.state.schema_cache = None
+    application.state.db_path = sqlite_db_path
+    application.state.duckdb_path = resolved_duckdb_path
+    application.state.schema_cache = {"sqlite": None, "duckdb": None}
 
     allowed_hosts_env = os.getenv("ALLOWED_HOSTS", "*").strip()
     if allowed_hosts_env and allowed_hosts_env != "*":
@@ -259,14 +293,19 @@ def create_app(
 
     @application.get("/api/health")
     def health_check() -> dict[str, str]:
-        db_file = Path(application.state.db_path)
-        if not db_file.exists():
-            ensure_database(db_file)
+        sqlite_file = Path(application.state.db_path)
+        duckdb_file = Path(application.state.duckdb_path)
+        if not sqlite_file.exists():
+            ensure_database(sqlite_file, engine="sqlite")
+        if not duckdb_file.exists():
+            ensure_database(duckdb_file, engine="duckdb")
         return {"status": "ok"}
 
     @application.get("/api/schema", response_model=list[TableSchema])
-    def get_schema() -> list[TableSchema]:
-        return [TableSchema(**table) for table in get_cached_schema()]
+    def get_schema(
+        engine: DatabaseEngine = Query("sqlite"),
+    ) -> list[TableSchema]:
+        return [TableSchema(**table) for table in get_cached_schema(engine)]
 
     @application.get(
         "/api/tables/{table_name}",
@@ -274,6 +313,7 @@ def create_app(
     )
     def browse_table(
         table_name: str,
+        engine: DatabaseEngine = Query("sqlite"),
         page: int = Query(1, ge=1),
         page_size: int = Query(15, ge=1, le=100),
         search: str = Query("", max_length=100),
@@ -281,7 +321,7 @@ def create_app(
         sort_dir: Literal["asc", "desc"] = Query("asc"),
     ) -> dict[str, Any]:
         """Retorna dados paginados e filtráveis de uma tabela válida do esquema."""
-        schema = get_cached_schema()
+        schema = get_cached_schema(engine)
         table_map = {t["name"]: t for t in schema}
         if table_name not in table_map:
             raise HTTPException(status_code=404, detail="Tabela não encontrada.")
@@ -290,33 +330,60 @@ def create_app(
         order_col = sort_by if sort_by in valid_columns else valid_columns[0]
         order_direction = "DESC" if sort_dir == "desc" else "ASC"
 
-        where_clause = ""
-        params: list[Any] = []
         term = search.strip()
-        if term:
-            escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            like_parts = [f'CAST("{col}" AS TEXT) LIKE ? ESCAPE \'\\\'' for col in valid_columns]
-            where_clause = "WHERE " + " OR ".join(like_parts)
-            params.extend([f"%{escaped}%"] * len(valid_columns))
+        offset = (page - 1) * page_size
+        db_file = get_engine_db_path(engine).resolve()
 
-        db_file = Path(application.state.db_path).resolve()
-        conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
-        try:
-            conn.execute("PRAGMA query_only = ON;")
-            total_rows = conn.execute(
-                f'SELECT COUNT(*) FROM "{table_name}" {where_clause}',
-                params,
-            ).fetchone()[0]
+        if engine == "duckdb":
+            ensure_database(db_file, engine="duckdb")
+            where_clause = ""
+            params: list[Any] = []
+            if term:
+                escaped = term.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like_parts = [f'LOWER(CAST("{col}" AS VARCHAR)) LIKE ? ESCAPE \'\\\'' for col in valid_columns]
+                where_clause = "WHERE " + " OR ".join(like_parts)
+                params.extend([f"%{escaped}%"] * len(valid_columns))
 
-            offset = (page - 1) * page_size
-            cursor = conn.execute(
-                f'SELECT * FROM "{table_name}" {where_clause} '
-                f'ORDER BY "{order_col}" {order_direction} LIMIT ? OFFSET ?',
-                [*params, page_size, offset],
-            )
-            rows = [list(r) for r in cursor.fetchall()]
-        finally:
-            conn.close()
+            conn = connect_duckdb_readonly(db_file)
+            try:
+                total_rows = conn.execute(
+                    f'SELECT COUNT(*) FROM "{table_name}" {where_clause}',
+                    params,
+                ).fetchone()[0]
+                raw_rows = conn.execute(
+                    f'SELECT * FROM "{table_name}" {where_clause} '
+                    f'ORDER BY "{order_col}" {order_direction} LIMIT ? OFFSET ?',
+                    [*params, page_size, offset],
+                ).fetchall()
+                rows = [[_sanitize_cell(cell) for cell in row] for row in raw_rows]
+            finally:
+                conn.close()
+        else:
+            ensure_database(db_file, engine="sqlite")
+            where_clause = ""
+            params = []
+            if term:
+                escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                like_parts = [f'CAST("{col}" AS TEXT) LIKE ? ESCAPE \'\\\'' for col in valid_columns]
+                where_clause = "WHERE " + " OR ".join(like_parts)
+                params.extend([f"%{escaped}%"] * len(valid_columns))
+
+            conn = sqlite3.connect(f"file:{db_file}?mode=ro", uri=True)
+            try:
+                conn.execute("PRAGMA query_only = ON;")
+                total_rows = conn.execute(
+                    f'SELECT COUNT(*) FROM "{table_name}" {where_clause}',
+                    params,
+                ).fetchone()[0]
+
+                cursor = conn.execute(
+                    f'SELECT * FROM "{table_name}" {where_clause} '
+                    f'ORDER BY "{order_col}" {order_direction} LIMIT ? OFFSET ?',
+                    [*params, page_size, offset],
+                )
+                rows = [list(r) for r in cursor.fetchall()]
+            finally:
+                conn.close()
 
         return {
             "table": table_name,
@@ -331,8 +398,9 @@ def create_app(
     @application.get("/api/challenges", response_model=list[ChallengeSummary])
     def get_challenges(
         nivel: DifficultyLevel | None = Query(None),
+        engine: DatabaseEngine = Query("sqlite"),
     ) -> list[ChallengeSummary]:
-        return [_to_challenge_summary(ch) for ch in list_challenges(nivel)]
+        return [_to_challenge_summary(ch, engine=engine) for ch in list_challenges(nivel)]
 
     @application.post(
         "/api/execute",
@@ -340,40 +408,57 @@ def create_app(
         dependencies=[Depends(enforce_rate_limit)],
     )
     def execute_query(payload: QueryPayload) -> ExecuteQueryResponse:
-        current_db = application.state.db_path
+        engine = payload.engine
+        current_db = get_engine_db_path(engine)
 
         if payload.challenge_id is None:
             try:
-                user_res = execute_readonly_sql(payload.sql, db_path=current_db)
+                user_res = execute_readonly_sql(
+                    payload.sql,
+                    db_path=current_db,
+                    engine=engine,
+                )
                 return ExecuteQueryResponse(
                     mode="free",
+                    engine=engine,
                     user_result=_to_table_result(user_res),
                 )
-            except (SQLValidationError, sqlite3.Error, TimeoutError) as exc:
+            except (SQLValidationError, sqlite3.Error, duckdb.Error, TimeoutError) as exc:
                 return ExecuteQueryResponse(
                     mode="free",
+                    engine=engine,
                     user_error=str(exc),
-                    user_error_hint=translate_sqlite_error(str(exc)),
+                    user_error_hint=translate_sql_error(str(exc), engine=engine),
                 )
 
         challenge = get_challenge(payload.challenge_id)
         if challenge is None:
             raise HTTPException(status_code=404, detail="Desafio não encontrado.")
 
-        expected_res = execute_readonly_sql(challenge.solucao_sql, db_path=current_db)
+        expected_sql = challenge.get_solution(engine)
+        expected_res = execute_readonly_sql(
+            expected_sql,
+            db_path=current_db,
+            engine=engine,
+        )
         expected_answer = ExpectedAnswer(
-            sql=challenge.solucao_sql,
+            sql=expected_sql,
             result=_to_table_result(expected_res),
         )
 
         try:
-            user_res = execute_readonly_sql(payload.sql, db_path=current_db)
-        except (SQLValidationError, sqlite3.Error, TimeoutError) as exc:
+            user_res = execute_readonly_sql(
+                payload.sql,
+                db_path=current_db,
+                engine=engine,
+            )
+        except (SQLValidationError, sqlite3.Error, duckdb.Error, TimeoutError) as exc:
             return ExecuteQueryResponse(
                 mode="challenge",
+                engine=engine,
                 challenge_id=challenge.id,
                 user_error=str(exc),
-                user_error_hint=translate_sqlite_error(str(exc)),
+                user_error_hint=translate_sql_error(str(exc), engine=engine),
                 expected=expected_answer,
                 is_correct=False,
                 feedback=f"Erro na sua consulta: {exc}",
@@ -386,6 +471,7 @@ def create_app(
         )
         return ExecuteQueryResponse(
             mode="challenge",
+            engine=engine,
             challenge_id=challenge.id,
             user_result=_to_table_result(user_res),
             expected=expected_answer,
@@ -400,11 +486,16 @@ def create_app(
         dependencies=[Depends(enforce_rate_limit)],
     )
     def explain_query(payload: QueryPayload) -> dict[str, Any]:
-        """Retorna o plano de execução SQLite (EXPLAIN QUERY PLAN) para fins didáticos."""
+        """Retorna o plano de execução SQLite ou DuckDB para fins didáticos."""
+        engine = payload.engine
         try:
-            res = explain_readonly_sql(payload.sql, db_path=application.state.db_path)
+            res = explain_readonly_sql(
+                payload.sql,
+                db_path=get_engine_db_path(engine),
+                engine=engine,
+            )
             return {"result": _to_table_result(res), "error": None}
-        except (SQLValidationError, sqlite3.Error, TimeoutError) as exc:
+        except (SQLValidationError, sqlite3.Error, duckdb.Error, TimeoutError) as exc:
             return {"result": None, "error": str(exc)}
 
     @application.get("/api/chat/status")
@@ -439,7 +530,7 @@ def create_app(
         try:
             reply, model = ask_gemini_tutor(
                 payload=payload,
-                schema=get_cached_schema(),
+                schema=get_cached_schema(payload.engine),
                 challenge=challenge,
             )
             remaining_daily = chat_daily_limiter.remaining(_extract_client_ip(request))

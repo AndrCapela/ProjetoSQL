@@ -225,3 +225,45 @@ def test_chat_thinking_config_and_daily_limit_controls(
         r3 = client.post("/api/chat", json={"message": "Pergunta 3"})
         assert r3.status_code == 429
         assert "diário" in r3.json()["detail"].lower()
+
+
+def test_chat_endpoint_supports_duckdb_friendly_sql_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, *, headers: dict[str, str], json: dict[str, Any], timeout: float):
+        captured["json"] = json
+        return _FakeHttpxResponse(
+            200,
+            {"candidates": [{"content": {"parts": [{"text": "Use QUALIFY no DuckDB."}]}}]},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    db_path = create_and_seed_database(tmp_path / "chat_duck.db", overwrite=True)
+    app = create_app(db_path=db_path)
+
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/chat",
+            json={
+                "message": "Posso usar QUALIFY aqui?",
+                "engine": "duckdb",
+                "challenge_id": "dificil-5",
+                "sql": "FROM notas SELECT * WHERE RANK() OVER (ORDER BY nota DESC) = 1;",
+                "last_error": "WHERE clause cannot contain window functions!",
+            },
+        )
+        assert res.status_code == 200
+        assert "QUALIFY" in res.json()["reply"]
+        system_text = captured["json"]["system_instruction"]["parts"][0]["text"]
+        user_text = captured["json"]["contents"][-1]["parts"][0]["text"]
+        assert "DuckDB" in system_text
+        assert "Friendly SQL" in system_text
+        assert "QUALIFY" in system_text
+        assert "DuckDB (Friendly SQL)" in user_text
+        assert "QUALIFY RANK() OVER" in user_text

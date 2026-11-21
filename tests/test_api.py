@@ -198,3 +198,98 @@ def test_execute_handles_non_json_sqlite_values_and_like_escaping(client: TestCl
     wildcard_res = client.get("/api/tables/alunos?search=%25")
     assert wildcard_res.status_code == 200
     assert wildcard_res.json()["total_rows"] == 0
+
+
+def test_duckdb_engine_endpoints_schema_challenges_execute_and_explain(client: TestClient) -> None:
+    schema_res = client.get("/api/schema?engine=duckdb")
+    assert schema_res.status_code == 200
+    tables = schema_res.json()
+    assert [t["name"] for t in tables] == [
+        "professores",
+        "cursos",
+        "disciplinas",
+        "alunos",
+        "alunos_disciplinas",
+        "notas",
+    ]
+
+    browse_res = client.get("/api/tables/disciplinas?engine=duckdb&page=1&page_size=5&search=bd")
+    assert browse_res.status_code == 200
+    assert browse_res.json()["total_rows"] == 3
+
+    challenges_res = client.get("/api/challenges?engine=duckdb")
+    assert challenges_res.status_code == 200
+    challenges = challenges_res.json()
+    assert len(challenges) == 40
+    ch7 = next(c for c in challenges if c["id"] == "dificil-7")
+    assert "DuckDB" in ch7["titulo"]
+    assert "YEAR()" in ch7["topicos"]
+
+    # Friendly SQL válido
+    friendly_ok = client.post(
+        "/api/execute",
+        json={
+            "engine": "duckdb",
+            "challenge_id": "dificil-5",
+            "sql": (
+                "FROM notas n "
+                "JOIN alunos_disciplinas ad ON ad.id = n.aluno_disciplina_id "
+                "JOIN alunos a ON a.id = ad.aluno_id "
+                "JOIN disciplinas d ON d.id = ad.disciplina_id "
+                "SELECT d.nome, a.nome, n.nota "
+                "QUALIFY RANK() OVER (PARTITION BY d.id ORDER BY n.nota DESC) = 1 "
+                "ORDER BY d.nome ASC, a.nome ASC;"
+            ),
+        },
+    )
+    assert friendly_ok.status_code == 200
+    ok_data = friendly_ok.json()
+    assert ok_data["engine"] == "duckdb"
+    assert ok_data["is_correct"] is True
+    assert "QUALIFY" in ok_data["expected"]["sql"]
+
+    # SQL tradicional também deve passar no motor DuckDB
+    ansi_ok = client.post(
+        "/api/execute",
+        json={
+            "engine": "duckdb",
+            "challenge_id": "facil-1",
+            "sql": "SELECT nome, idade, cidade FROM alunos WHERE idade > 30;",
+        },
+    )
+    assert ansi_ok.status_code == 200
+    assert ansi_ok.json()["is_correct"] is True
+
+    # Erro no DuckDB retorna dica didática específica
+    err_res = client.post(
+        "/api/execute",
+        json={
+            "engine": "duckdb",
+            "challenge_id": "dificil-7",
+            "sql": "SELECT coluna_inexistente FROM alunos;",
+        },
+    )
+    assert err_res.status_code == 200
+    err_data = err_res.json()
+    assert err_data["is_correct"] is False
+    assert err_data["user_error"] is not None
+    assert err_data["user_error_hint"] is not None
+    assert "esquema" in err_data["user_error_hint"].lower()
+
+    # Modo livre e EXPLAIN no DuckDB
+    free_res = client.post(
+        "/api/execute",
+        json={"engine": "duckdb", "sql": "SUMMARIZE alunos;"},
+    )
+    assert free_res.status_code == 200
+    assert free_res.json()["mode"] == "free"
+    assert free_res.json()["engine"] == "duckdb"
+    assert free_res.json()["user_result"]["row_count"] == 6
+
+    explain_res = client.post(
+        "/api/explain",
+        json={"engine": "duckdb", "sql": "FROM alunos SELECT nome WHERE idade > 30;"},
+    )
+    assert explain_res.status_code == 200
+    assert explain_res.json()["error"] is None
+    assert explain_res.json()["result"]["row_count"] >= 1

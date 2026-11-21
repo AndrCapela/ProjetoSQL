@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     APP_ENV=production \
     PORT=7500 \
+    HOME=/tmp \
     TMPDIR=/tmp \
     SQLITE_TMPDIR=/tmp
 
@@ -18,11 +19,11 @@ RUN pip install --no-cache-dir --upgrade pip \
 RUN groupadd --system appgroup \
     && useradd --system --gid appgroup --no-create-home appuser
 
-# Copia a aplicação e gera a base SQLite em modo somente leitura para o appuser
+# Copia a aplicação e gera as bases SQLite e DuckDB em modo somente leitura para o appuser
 COPY app/ ./app/
 RUN python -m app.database \
     && chown -R root:appgroup /app \
-    && chmod 444 /app/data/escola.db \
+    && chmod 444 /app/data/escola.db /app/data/escola.duckdb \
     && chmod 555 /app/data
 
 USER appuser
